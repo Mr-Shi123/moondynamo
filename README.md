@@ -8,11 +8,14 @@ A typed Amazon DynamoDB client for MoonBit. MoonDynamo talks the DynamoDB JSON A
 
 ## Features
 
-- **Core operations**: `CreateTable`, `DescribeTable`, `PutItem`, `GetItem`, `DeleteItem`, and `Query`.
+- **Core operations**: `CreateTable`, `DescribeTable`, `PutItem`, `GetItem`, `UpdateItem`, `DeleteItem`, and `Query`.
 - **Every DynamoDB attribute type**: `S`, `N`, `B`, `BOOL`, `NULL`, `L`, `M`, `SS`, `NS`, and `BS` map to one typed `AttributeValue` enum. Numbers stay as decimal strings end to end, so no precision is lost through floating point.
-- **Conditional writes and queries**: you write condition and key-condition expressions; the client sends typed expression-attribute values with them.
+- **Conditional writes and filtered queries**: you write condition, key-condition, and filter expressions; the client sends typed expression-attribute values with them.
+- **Reserved-word-safe expressions**: pass `#name` placeholders through `expression_attribute_names`, so attributes called `status`, `size`, or `timestamp` are reachable from any expression.
+- **Partial updates**: `update_item` runs `SET` / `ADD` / `REMOVE` expressions and can hand back the resulting attributes via `ReturnValues`.
 - **Pagination**: `Query` returns `LastEvaluatedKey`; feed it back as `exclusive_start_key` to walk a table page by page.
 - **Structured errors**: service failures raise `DynamoError::Service` carrying the HTTP status, the error code, the message, and the `x-amzn-RequestId` of the failed call.
+- **Automatic retries**: throttling and transient server failures — 429/500/503 statuses and codes like `ProvisionedThroughputExceededException` — are retried with capped exponential backoff (2 retries, 100 ms doubling up to 2 s) before an error ever reaches your code.
 - **Local-first configuration**: endpoint, region, and credentials (including session tokens) are all explicit, so pointing at DynamoDB Local takes no extra setup.
 
 ## Requirements
@@ -47,7 +50,7 @@ moon test --target js
 moon check --target js --deny-warn
 ```
 
-The bundled end-to-end demo ([cmd/main/main.mbt](cmd/main/main.mbt)) creates a table, writes a book, reads it back, queries it, deletes it, and confirms it is gone. The table is left in place so the demo can be re-run.
+The bundled end-to-end demo ([cmd/main/main.mbt](cmd/main/main.mbt)) creates a table, writes a book, reads it back, updates its page count with `ReturnValues`, runs a filtered query through a `#name` placeholder, deletes the item, and confirms it is gone. The table is left in place so the demo can be re-run.
 
 **Option A — DynamoDB Local** (recommended):
 
@@ -144,6 +147,45 @@ try db.put_item(
 
 You write the expression string; typed placeholder values travel in `expression_attribute_values?` — for example `Map([(":max", @moondynamo.Number("500"))])`.
 
+### Update items
+
+```moonbit
+let updated = db.update_item(
+  "Books",
+  Map([("pk", @moondynamo.Text("book#1"))]),
+  "SET pages = :pages",
+  expression_attribute_values=Map([(":pages", @moondynamo.Number("200"))]),
+  return_values=AllNew,
+)
+guard updated is Some(book) && book.get("pages") == Some(@moondynamo.Number("200")) else {
+  fail("UpdateItem did not apply the new page count")
+}
+```
+
+The update expression is a DynamoDB `UpdateExpression` string, so `SET` / `ADD` / `REMOVE` clauses and `if_not_exists(...)` all work as documented by AWS. With `return_values` (`AllNew`, `AllOld`, `UpdatedNew`, `UpdatedOld`, or `Nothing`) the returned `Item?` carries the affected attributes; without it you get `None`.
+
+### Reserved words and name placeholders
+
+DynamoDB reserves hundreds of words (`status`, `size`, `name`, `timestamp`, …), so expressions must reach such attributes through `#name` placeholders. `put_item`, `update_item`, `delete_item`, and `query` all accept `expression_attribute_names?`, and `query` also takes a `filter_expression?`:
+
+```moonbit
+let result = db.query(
+  "Books",
+  "pk = :pk",
+  Map([
+    (":pk", @moondynamo.Text("user#1")),
+    (":st", @moondynamo.Text("active")),
+    (":max", @moondynamo.Number("500")),
+  ]),
+  filter_expression="#st = :st AND pages <= :max",
+  expression_attribute_names=Map([("#st", "status")]),
+)
+for book in result.items {
+  // only active books with at most 500 pages
+  ignore(book)
+}
+```
+
 ### Query with pagination
 
 ```moonbit
@@ -170,7 +212,7 @@ The small `limit` is just to force `LastEvaluatedKey` continuation in a tiny tab
 
 ### Error handling
 
-Every operation can raise; catch and inspect what you care about:
+Every operation can raise; catch and inspect what you care about. Transient failures are already retried inside the client (see *Automatic retries* above), so what surfaces is usually a real problem:
 
 ```moonbit
 try db.describe_table("Books") |> ignore catch {
@@ -215,9 +257,9 @@ pub(all) suberror DynamoError {
 
 ## How it is tested
 
-- **16 unit tests** (`moon test --target js`) cover attribute round-trips, request construction and signing, response and error parsing, and pagination payloads.
-- **A self-verifying HTTP fixture** ([scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)) exercises a real HTTP round trip and independently recomputes every SigV4 signature, so signing drift cannot pass silently.
-- **Verified against DynamoDB Local 1.25.1** end to end: `CreateTable → DescribeTable → PutItem → GetItem → Query → DeleteItem → GetItem`, including conditional-write rejection with a real `ConditionalCheckFailedException` and multi-page `Query` walks through `LastEvaluatedKey`.
+- **24 unit tests** (`moon test --target js`) cover attribute round-trips, request construction and signing, expression payloads with name placeholders, `UpdateItem` payloads and response parsing, the `ReturnValues` mapping, response and error parsing, pagination payloads, and the retry decision predicate.
+- **A self-verifying HTTP fixture** ([scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)) exercises a real HTTP round trip and independently recomputes every SigV4 signature, so signing drift cannot pass silently. Its scenario now includes `UpdateItem` with `ReturnValues=ALL_NEW` and a filtered `Query` via a `#name` placeholder.
+- **Verified against DynamoDB Local 1.25.1** end to end: `CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → DeleteItem → GetItem`, including conditional-write rejection with a real `ConditionalCheckFailedException`, multi-page `Query` walks through `LastEvaluatedKey`, and `#name` placeholders for reserved-word attributes.
 
 ### Platform status
 
@@ -235,7 +277,8 @@ Two thin layers:
 
 - Credentials come from the caller — no default credential chain, no automatic refresh.
 - The endpoint must be an origin without a path; no IPv6 hostnames yet.
-- Value placeholders (`:name`) are supported; name placeholders (`#name`) and expression builders are not (yet).
+- Value placeholders (`:name`) and name placeholders (`#name`) are supported; programmatic expression builders are not (yet).
+- The retry policy is fixed — 2 retries, 100 ms doubling up to 2 s, no jitter or per-client tuning.
 - No Batch*, Transact*, `Scan`, Streams, PartiQL, or schema modeling yet.
 - `create_table` only creates on-demand tables with string keys; other shapes need raw calls.
 
