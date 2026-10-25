@@ -5,10 +5,26 @@ test "put payload carries a conditional expression and typed value" {
     Map([("pk", Text("book#1"))]),
     condition_expression=Some("attribute_not_exists(pk)"),
     expression_attribute_values=Map([]),
+    expression_attribute_names=Map([]),
   )
   assert_eq(
     payload.stringify(),
     "{\"TableName\":\"books\",\"Item\":{\"pk\":{\"S\":\"book#1\"}},\"ConditionExpression\":\"attribute_not_exists(pk)\"}",
+  )
+}
+
+///|
+test "put payload sends name placeholders for reserved words" {
+  let payload = put_payload(
+    "books",
+    Map([("pk", Text("book#1"))]),
+    condition_expression=Some("attribute_not_exists(#pk)"),
+    expression_attribute_values=Map([]),
+    expression_attribute_names=Map([("#pk", "pk")]),
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"TableName\":\"books\",\"Item\":{\"pk\":{\"S\":\"book#1\"}},\"ConditionExpression\":\"attribute_not_exists(#pk)\",\"ExpressionAttributeNames\":{\"#pk\":\"pk\"}}",
   )
 }
 
@@ -41,6 +57,8 @@ test "query payload sends the pagination key" {
     "books",
     "pk = :pk",
     Map([(":pk", Text("book#1"))]),
+    filter_expression=None,
+    expression_attribute_names=Map([]),
     exclusive_start_key=Some(Map([("pk", Text("book#0"))])),
     limit=Some(10),
   )
@@ -48,6 +66,117 @@ test "query payload sends the pagination key" {
     payload.stringify(),
     "{\"TableName\":\"books\",\"KeyConditionExpression\":\"pk = :pk\",\"ExpressionAttributeValues\":{\":pk\":{\"S\":\"book#1\"}},\"ExclusiveStartKey\":{\"pk\":{\"S\":\"book#0\"}},\"Limit\":10}",
   )
+}
+
+///|
+test "query payload sends filter expression and name placeholders" {
+  let payload = query_payload(
+    "books",
+    "pk = :pk",
+    Map([(":pk", Text("user#1")), (":st", Text("active"))]),
+    filter_expression=Some("#st = :st"),
+    expression_attribute_names=Map([("#st", "status")]),
+    exclusive_start_key=None,
+    limit=None,
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"TableName\":\"books\",\"KeyConditionExpression\":\"pk = :pk\",\"FilterExpression\":\"#st = :st\",\"ExpressionAttributeValues\":{\":pk\":{\"S\":\"user#1\"},\":st\":{\"S\":\"active\"}},\"ExpressionAttributeNames\":{\"#st\":\"status\"}}",
+  )
+}
+
+///|
+test "update payload carries expression, names, and return values" {
+  let payload = update_payload(
+    "books",
+    Map([("pk", Text("book#1"))]),
+    "SET #st = :st ADD pages :inc",
+    expression_attribute_values=Map([
+      (":st", Text("archived")),
+      (":inc", Number("5")),
+    ]),
+    expression_attribute_names=Map([("#st", "status")]),
+    return_values=Some(UpdatedNew),
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"TableName\":\"books\",\"Key\":{\"pk\":{\"S\":\"book#1\"}},\"UpdateExpression\":\"SET #st = :st ADD pages :inc\",\"ExpressionAttributeValues\":{\":st\":{\"S\":\"archived\"},\":inc\":{\"N\":\"5\"}},\"ExpressionAttributeNames\":{\"#st\":\"status\"},\"ReturnValues\":\"UPDATED_NEW\"}",
+  )
+}
+
+///|
+test "update payload omits empty expression maps" {
+  let payload = update_payload(
+    "books",
+    Map([("pk", Text("book#1"))]),
+    "REMOVE note",
+    expression_attribute_values=Map([]),
+    expression_attribute_names=Map([]),
+    return_values=None,
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"TableName\":\"books\",\"Key\":{\"pk\":{\"S\":\"book#1\"}},\"UpdateExpression\":\"REMOVE note\"}",
+  )
+}
+
+///|
+test "update result returns attributes when present" {
+  let result = parse_update_result(
+    @json.parse(
+      "{\"Attributes\":{\"pk\":{\"S\":\"book#1\"},\"pages\":{\"N\":\"200\"}}}",
+    ),
+  )
+  assert_eq(
+    result,
+    Some(Map([("pk", Text("book#1")), ("pages", Number("200"))])),
+  )
+}
+
+///|
+test "update result without attributes is none" {
+  assert_eq(parse_update_result(@json.parse("{}")), None)
+}
+
+///|
+test "return values map to wire strings" {
+  assert_eq(Nothing.to_wire(), "NONE")
+  assert_eq(AllOld.to_wire(), "ALL_OLD")
+  assert_eq(AllNew.to_wire(), "ALL_NEW")
+  assert_eq(UpdatedOld.to_wire(), "UPDATED_OLD")
+  assert_eq(UpdatedNew.to_wire(), "UPDATED_NEW")
+}
+
+///|
+test "retry policy covers throttling and transient statuses" {
+  assert_eq(
+    is_retryable(
+      Service(400, "ProvisionedThroughputExceededException", "throttled", None),
+    ),
+    true,
+  )
+  assert_eq(
+    is_retryable(Service(429, "ThrottlingException", "slow down", None)),
+    true,
+  )
+  assert_eq(
+    is_retryable(Service(503, "ServiceUnavailable", "unavailable", None)),
+    true,
+  )
+  assert_eq(
+    is_retryable(Service(500, "InternalServerError", "boom", None)),
+    true,
+  )
+  assert_eq(
+    is_retryable(Service(400, "ConditionalCheckFailedException", "nope", None)),
+    false,
+  )
+  assert_eq(
+    is_retryable(Service(400, "ValidationException", "bad input", None)),
+    false,
+  )
+  assert_eq(is_retryable(InvalidConfig("bad endpoint")), false)
+  assert_eq(is_retryable(InvalidResponse("bad body")), false)
 }
 
 ///|

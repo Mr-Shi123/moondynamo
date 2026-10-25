@@ -80,9 +80,21 @@ const server = http.createServer(async (request, response) => {
         if (body.Key?.pk?.S !== 'book#1') throw new Error('invalid GetItem key');
         send(response, 200, item ? { Item: item } : {});
         break;
+      case 'UpdateItem':
+        if (body.Key?.pk?.S !== 'book#1') throw new Error('invalid UpdateItem key');
+        if (body.UpdateExpression !== 'SET pages = :pages' || body.ExpressionAttributeValues?.[':pages']?.N !== '200') {
+          throw new Error('invalid UpdateItem expression');
+        }
+        if (body.ReturnValues !== 'ALL_NEW') throw new Error('unexpected UpdateItem ReturnValues');
+        item = { ...item, pages: { N: '200' } };
+        send(response, 200, { Attributes: item });
+        break;
       case 'Query':
         if (body.KeyConditionExpression !== 'pk = :pk' || body.ExpressionAttributeValues?.[':pk']?.S !== 'book#1') {
           throw new Error('invalid Query expression');
+        }
+        if (body.FilterExpression !== '#st = :st' || body.ExpressionAttributeNames?.['#st'] !== 'status' || body.ExpressionAttributeValues?.[':st']?.S !== 'active') {
+          throw new Error('invalid Query filter');
         }
         send(response, 200, { Items: item ? [item] : [], Count: item ? 1 : 0, ScannedCount: item ? 1 : 0 });
         break;
@@ -94,7 +106,7 @@ const server = http.createServer(async (request, response) => {
       default:
         throw new Error(`unexpected action ${action}`);
     }
-    if (actions.join(',') === 'CreateTable,DescribeTable,PutItem,GetItem,Query,DeleteItem,GetItem') {
+    if (actions.join(',') === 'CreateTable,DescribeTable,PutItem,GetItem,UpdateItem,Query,DeleteItem,GetItem') {
       console.log('HTTP integration fixture passed: ' + actions.join(' → '));
       server.close();
     }

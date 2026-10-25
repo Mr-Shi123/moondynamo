@@ -28,6 +28,32 @@ fn utc_timestamp() -> String raise {
 }
 
 ///|
+/// Retry attempts allowed after the first call fails with a transient error.
+const MAX_RETRIES = 2
+
+///|
+/// Whether a failed attempt is worth retrying: throttling and throughput
+/// errors (which arrive as HTTP 400 with a service-specific code) plus
+/// rate-limit and transient server statuses (429/500/503). Config mistakes,
+/// malformed responses, and transport failures surface immediately.
+fn is_retryable(error : Error) -> Bool {
+  match error {
+    Service(status, code, _, _) => {
+      let transient_status = status == 429 || status == 500 || status == 503
+      let throttled = match code {
+        "ProvisionedThroughputExceededException"
+        | "ThrottlingException"
+        | "RequestLimitExceeded"
+        | "ServiceUnavailable" => true
+        _ => false
+      }
+      transient_status || throttled
+    }
+    _ => false
+  }
+}
+
+///|
 async fn Client::call(self : Client, action : String, payload : Json) -> Json {
   let request = prepare_request(self.config, action, payload, utc_timestamp())
   let headers : Map[String, String] = Map([])
@@ -38,8 +64,54 @@ async fn Client::call(self : Client, action : String, payload : Json) -> Json {
       headers[name] = value
     }
   }
-  let (response, body) = @http.post(request.url, request.body, headers~)
-  parse_response(response.code, response.headers, body.text())
+  @async.retry(
+    ExponentialDelay(initial=100, factor=2.0, maximum=2000),
+    max_retry=MAX_RETRIES,
+    fatal_error=fn(error) { !is_retryable(error) },
+  ) <| () => {
+    let (response, body) = @http.post(request.url, request.body, headers~)
+    parse_response(response.code, response.headers, body.text())
+  }
+}
+
+///|
+/// Which attributes `UpdateItem` should return, mirroring DynamoDB's
+/// `ReturnValues` parameter.
+pub(all) enum ReturnValues {
+  Nothing
+  AllOld
+  AllNew
+  UpdatedOld
+  UpdatedNew
+} derive(Eq, Debug)
+
+///|
+pub extend ReturnValues with Eq::{not_equal, equal}
+
+///|
+pub extend ReturnValues with @debug.Debug::{to_repr}
+
+///|
+fn ReturnValues::to_wire(self : ReturnValues) -> String {
+  match self {
+    Nothing => "NONE"
+    AllOld => "ALL_OLD"
+    AllNew => "ALL_NEW"
+    UpdatedOld => "UPDATED_OLD"
+    UpdatedNew => "UPDATED_NEW"
+  }
+}
+
+///|
+/// Expression attribute name placeholders (`#name` -> real attribute name),
+/// the escape hatch for attribute names that collide with DynamoDB
+/// reserved words.
+fn encode_names(names : Map[String, String]) -> Json {
+  let fields : Map[String, Json] = Map([])
+  for placeholder, name in names {
+    fields[placeholder] = Json::string(name)
+  }
+  Json::object(fields)
 }
 
 ///|
@@ -48,6 +120,7 @@ fn put_payload(
   item : Item,
   condition_expression~ : String?,
   expression_attribute_values~ : Item,
+  expression_attribute_names~ : Map[String, String],
 ) -> Json {
   let fields : Map[String, Json] = Map([
     ("TableName", Json::string(table)),
@@ -59,6 +132,11 @@ fn put_payload(
   if !expression_attribute_values.is_empty() {
     fields["ExpressionAttributeValues"] = encode_item(
       expression_attribute_values,
+    )
+  }
+  if !expression_attribute_names.is_empty() {
+    fields["ExpressionAttributeNames"] = encode_names(
+      expression_attribute_names,
     )
   }
   Json::object(fields)
@@ -74,19 +152,59 @@ fn query_payload(
   table : String,
   key_condition_expression : String,
   expression_attribute_values : Item,
+  filter_expression~ : String?,
+  expression_attribute_names~ : Map[String, String],
   exclusive_start_key~ : Item?,
   limit~ : Int?,
 ) -> Json {
   let fields : Map[String, Json] = Map([
     ("TableName", Json::string(table)),
     ("KeyConditionExpression", Json::string(key_condition_expression)),
-    ("ExpressionAttributeValues", encode_item(expression_attribute_values)),
   ])
+  if filter_expression is Some(expression) {
+    fields["FilterExpression"] = Json::string(expression)
+  }
+  fields["ExpressionAttributeValues"] = encode_item(expression_attribute_values)
+  if !expression_attribute_names.is_empty() {
+    fields["ExpressionAttributeNames"] = encode_names(
+      expression_attribute_names,
+    )
+  }
   if exclusive_start_key is Some(key) {
     fields["ExclusiveStartKey"] = encode_item(key)
   }
   if limit is Some(count) {
     fields["Limit"] = @json.to_json(count)
+  }
+  Json::object(fields)
+}
+
+///|
+fn update_payload(
+  table : String,
+  key : Item,
+  update_expression : String,
+  expression_attribute_values~ : Item,
+  expression_attribute_names~ : Map[String, String],
+  return_values~ : ReturnValues?,
+) -> Json {
+  let fields : Map[String, Json] = Map([
+    ("TableName", Json::string(table)),
+    ("Key", encode_item(key)),
+    ("UpdateExpression", Json::string(update_expression)),
+  ])
+  if !expression_attribute_values.is_empty() {
+    fields["ExpressionAttributeValues"] = encode_item(
+      expression_attribute_values,
+    )
+  }
+  if !expression_attribute_names.is_empty() {
+    fields["ExpressionAttributeNames"] = encode_names(
+      expression_attribute_names,
+    )
+  }
+  if return_values is Some(values) {
+    fields["ReturnValues"] = Json::string(values.to_wire())
   }
   Json::object(fields)
 }
@@ -100,6 +218,18 @@ fn parse_get_item(json : Json) -> Item? raise {
         None => None
       }
     _ => raise InvalidResponse("GetItem response must be an object")
+  }
+}
+
+///|
+fn parse_update_result(json : Json) -> Item? raise {
+  match json {
+    Object(fields) =>
+      match fields.get("Attributes") {
+        Some(value) => Some(decode_item(value))
+        None => None
+      }
+    _ => raise InvalidResponse("UpdateItem response must be an object")
   }
 }
 
@@ -139,9 +269,14 @@ pub async fn Client::put_item(
   item : Item,
   condition_expression? : String,
   expression_attribute_values? : Item,
+  expression_attribute_names? : Map[String, String],
 ) -> Unit {
   let values = match expression_attribute_values {
     Some(values) => values
+    None => Map([])
+  }
+  let names = match expression_attribute_names {
+    Some(names) => names
     None => Map([])
   }
   self.call(
@@ -151,6 +286,7 @@ pub async fn Client::put_item(
       item,
       condition_expression~,
       expression_attribute_values=values,
+      expression_attribute_names=names,
     ),
   )
   |> ignore
@@ -177,6 +313,7 @@ pub async fn Client::delete_item(
   key : Item,
   condition_expression? : String,
   expression_attribute_values? : Item,
+  expression_attribute_names? : Map[String, String],
 ) -> Unit {
   let fields = key_payload(table, key)
   if condition_expression is Some(expression) {
@@ -185,7 +322,47 @@ pub async fn Client::delete_item(
   if expression_attribute_values is Some(values) && !values.is_empty() {
     fields["ExpressionAttributeValues"] = encode_item(values)
   }
+  if expression_attribute_names is Some(names) && !names.is_empty() {
+    fields["ExpressionAttributeNames"] = encode_names(names)
+  }
   self.call("DeleteItem", Json::object(fields)) |> ignore
+}
+
+///|
+/// Apply an `UpdateExpression` (e.g. `SET pages = :p`, `ADD views :one`,
+/// `REMOVE note`) to the item identified by `key`. Pass `return_values` to
+/// get the resulting attributes back; without it the reply carries none and
+/// the result is `None`.
+pub async fn Client::update_item(
+  self : Client,
+  table : String,
+  key : Item,
+  update_expression : String,
+  expression_attribute_values? : Item,
+  expression_attribute_names? : Map[String, String],
+  return_values? : ReturnValues,
+) -> Item? {
+  let values = match expression_attribute_values {
+    Some(values) => values
+    None => Map([])
+  }
+  let names = match expression_attribute_names {
+    Some(names) => names
+    None => Map([])
+  }
+  parse_update_result(
+    self.call(
+      "UpdateItem",
+      update_payload(
+        table,
+        key,
+        update_expression,
+        expression_attribute_values=values,
+        expression_attribute_names=names,
+        return_values~,
+      ),
+    ),
+  )
 }
 
 ///|
@@ -194,9 +371,15 @@ pub async fn Client::query(
   table : String,
   key_condition_expression : String,
   expression_attribute_values : Item,
+  filter_expression? : String,
   exclusive_start_key? : Item,
   limit? : Int,
+  expression_attribute_names? : Map[String, String],
 ) -> QueryResult {
+  let names = match expression_attribute_names {
+    Some(names) => names
+    None => Map([])
+  }
   parse_query_result(
     self.call(
       "Query",
@@ -204,6 +387,8 @@ pub async fn Client::query(
         table,
         key_condition_expression,
         expression_attribute_values,
+        filter_expression~,
+        expression_attribute_names=names,
         exclusive_start_key~,
         limit~,
       ),
