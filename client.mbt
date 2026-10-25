@@ -15,6 +15,35 @@ pub(all) struct QueryResult {
 }
 
 ///|
+/// Result of a `batch_get_item` call: the items DynamoDB did return, plus
+/// the keys it could not process (usually throttled) for the caller to
+/// re-drive in a follow-up call.
+pub(all) struct BatchGetResult {
+  items : Array[Item]
+  unprocessed_keys : Array[Item]
+} derive(Eq, Debug)
+
+///|
+pub extend BatchGetResult with Eq::{not_equal, equal}
+
+///|
+pub extend BatchGetResult with @debug.Debug::{to_repr}
+
+///|
+/// One write operation inside a `batch_write_item` call: either overwrite
+/// the item under `Put(item)` or remove the item under `Delete(key)`.
+pub(all) enum WriteRequest {
+  Put(Item)
+  Delete(Item)
+} derive(Eq, Debug)
+
+///|
+pub extend WriteRequest with Eq::{not_equal, equal}
+
+///|
+pub extend WriteRequest with @debug.Debug::{to_repr}
+
+///|
 fn utc_timestamp() -> String raise {
   let instant = @time.unix(@async.now() / 1000L)
   instant.year().to_string().pad_start(4, '0') +
@@ -259,6 +288,179 @@ fn update_payload(
     fields["ReturnValues"] = Json::string(values.to_wire())
   }
   Json::object(fields)
+}
+
+///|
+/// DynamoDB accepts at most 100 keys per BatchGetItem request.
+const MAX_BATCH_GET_KEYS = 100
+
+///|
+/// DynamoDB accepts at most 25 write requests per BatchWriteItem call.
+const MAX_BATCH_WRITE_REQUESTS = 25
+
+///|
+fn batch_get_payload(
+  table : String,
+  keys : Array[Item],
+  consistent_read~ : Bool?,
+) -> Json raise {
+  if keys.is_empty() {
+    raise InvalidConfig("batch_get_item needs at least one key")
+  }
+  if keys.length() > MAX_BATCH_GET_KEYS {
+    raise InvalidConfig(
+      "batch_get_item accepts at most 100 keys per request, got \{keys.length()}",
+    )
+  }
+  let entries : Array[Json] = []
+  for key in keys {
+    entries.push(encode_item(key))
+  }
+  let table_entry : Map[String, Json] = Map([("Keys", Json::array(entries))])
+  if consistent_read is Some(true) {
+    table_entry["ConsistentRead"] = Json::boolean(true)
+  }
+  let request_items : Map[String, Json] = Map([
+    (table, Json::object(table_entry)),
+  ])
+  Json::object(Map([("RequestItems", Json::object(request_items))]))
+}
+
+///|
+fn batch_write_payload(
+  table : String,
+  requests : Array[WriteRequest],
+) -> Json raise {
+  if requests.is_empty() {
+    raise InvalidConfig("batch_write_item needs at least one write request")
+  }
+  if requests.length() > MAX_BATCH_WRITE_REQUESTS {
+    raise InvalidConfig(
+      "batch_write_item accepts at most 25 write requests per call, got \{requests.length()}",
+    )
+  }
+  let entries : Array[Json] = []
+  for request in requests {
+    let entry = match request {
+      Put(item) =>
+        Json::object(
+          Map([("PutRequest", Json::object(Map([("Item", encode_item(item))])))]),
+        )
+      Delete(key) =>
+        Json::object(
+          Map([
+            ("DeleteRequest", Json::object(Map([("Key", encode_item(key))]))),
+          ]),
+        )
+    }
+    entries.push(entry)
+  }
+  let request_items : Map[String, Json] = Map([(table, Json::array(entries))])
+  Json::object(Map([("RequestItems", Json::object(request_items))]))
+}
+
+///|
+fn parse_batch_get_result(table : String, json : Json) -> BatchGetResult raise {
+  let fields = match json {
+    Object(fields) => fields
+    _ => raise InvalidResponse("BatchGetItem response must be an object")
+  }
+  let items : Array[Item] = []
+  match fields.get("Responses") {
+    Some(Object(responses)) =>
+      match responses.get(table) {
+        Some(Array(values)) =>
+          for value in values {
+            items.push(decode_item(value))
+          }
+        Some(_) =>
+          raise InvalidResponse("BatchGetItem Responses entry must be an array")
+        None => ()
+      }
+    Some(_) => raise InvalidResponse("BatchGetItem Responses must be an object")
+    None => ()
+  }
+  let unprocessed_keys : Array[Item] = []
+  match fields.get("UnprocessedKeys") {
+    Some(Object(tables)) =>
+      match tables.get(table) {
+        Some(Object(entry)) =>
+          match entry.get("Keys") {
+            Some(Array(values)) =>
+              for value in values {
+                unprocessed_keys.push(decode_item(value))
+              }
+            Some(_) =>
+              raise InvalidResponse(
+                "UnprocessedKeys entry Keys must be an array",
+              )
+            None => ()
+          }
+        Some(_) =>
+          raise InvalidResponse("UnprocessedKeys entry must be an object")
+        None => ()
+      }
+    Some(_) => raise InvalidResponse("UnprocessedKeys must be an object")
+    None => ()
+  }
+  { items, unprocessed_keys, }
+}
+
+///|
+fn parse_batch_write_result(
+  table : String,
+  json : Json,
+) -> Array[WriteRequest] raise {
+  let fields = match json {
+    Object(fields) => fields
+    _ => raise InvalidResponse("BatchWriteItem response must be an object")
+  }
+  let unprocessed : Array[WriteRequest] = []
+  match fields.get("UnprocessedItems") {
+    Some(Object(tables)) =>
+      match tables.get(table) {
+        Some(Array(values)) =>
+          for value in values {
+            unprocessed.push(decode_write_request(value))
+          }
+        Some(_) =>
+          raise InvalidResponse(
+            "BatchWriteItem UnprocessedItems entry must be an array",
+          )
+        None => ()
+      }
+    Some(_) =>
+      raise InvalidResponse("BatchWriteItem UnprocessedItems must be an object")
+    None => ()
+  }
+  unprocessed
+}
+
+///|
+fn decode_write_request(json : Json) -> WriteRequest raise {
+  let fields = match json {
+    Object(fields) => fields
+    _ => raise InvalidResponse("write request must be an object")
+  }
+  match fields.get("PutRequest") {
+    Some(Object(put)) =>
+      match put.get("Item") {
+        Some(item) => Put(decode_item(item))
+        None => raise InvalidResponse("PutRequest must carry an Item")
+      }
+    _ =>
+      match fields.get("DeleteRequest") {
+        Some(Object(delete)) =>
+          match delete.get("Key") {
+            Some(key) => Delete(decode_item(key))
+            None => raise InvalidResponse("DeleteRequest must carry a Key")
+          }
+        _ =>
+          raise InvalidResponse(
+            "write request must be a PutRequest or DeleteRequest",
+          )
+      }
+  }
 }
 
 ///|
@@ -555,5 +757,39 @@ pub async fn Client::describe_table(self : Client, table : String) -> Json {
   self.call(
     "DescribeTable",
     Json::object(Map([("TableName", Json::string(table))])),
+  )
+}
+
+///|
+/// Read up to 100 items in one round trip. Keys that do not exist are simply
+/// absent from `items`; keys DynamoDB could not process (usually throttled)
+/// come back in `unprocessed_keys` — re-drive them in a follow-up call.
+/// Consistent reads can be requested for the base table with
+/// `consistent_read`.
+pub async fn Client::batch_get_item(
+  self : Client,
+  table : String,
+  keys : Array[Item],
+  consistent_read? : Bool,
+) -> BatchGetResult {
+  parse_batch_get_result(
+    table,
+    self.call("BatchGetItem", batch_get_payload(table, keys, consistent_read~)),
+  )
+}
+
+///|
+/// Apply up to 25 puts and deletes in one round trip. Requests DynamoDB
+/// could not process come back as the return value — re-drive them in a
+/// follow-up call. A batch write is not atomic and cannot update the same
+/// item twice in one call; use transactions when those guarantees matter.
+pub async fn Client::batch_write_item(
+  self : Client,
+  table : String,
+  requests : Array[WriteRequest],
+) -> Array[WriteRequest] {
+  parse_batch_write_result(
+    table,
+    self.call("BatchWriteItem", batch_write_payload(table, requests)),
   )
 }

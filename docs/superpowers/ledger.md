@@ -27,3 +27,11 @@ Ruling: v0.3 completes the read paths: `query` gains `index_name` (local/global 
 Ruling: The demo regression found during v0.3 (a `git restore` had reverted the v0.2 demo additions before they were committed, so commit 9509966 shipped the old demo against the upgraded fixture) was fixed by re-landing the full demo flow; the mock now also covers Scan.
 
 Verification: 28 JavaScript tests passed (`moon check --target js --deny-warn` and `moon check --target native` clean). The fixture sequence is CreateTable, DescribeTable, PutItem, GetItem, UpdateItem, Query, Scan, DeleteItem, GetItem with independent SigV4 recomputation. Against DynamoDB Local 1.25.1 the demo ran three times and a harness verified the README snippets verbatim: a Query against a real GSI (`index_name` + `descending` + `#st` placeholder) and a filtered, paged Scan. Discovery worth remembering: DynamoDB Local 1.25.1 namespaces tables per access key — a table created via curl with credentials `fake` is invisible to a client signing with key `local`; table setup for tests must reuse the client's access key.
+
+## v0.4 (2026-10-25, published 10-26)
+
+Ruling: v0.4 adds the batch helpers `batch_get_item` (up to 100 keys) and `batch_write_item` (up to 25 Put/Delete requests) as single-table wrappers over the multi-table AWS wire format — single-table covers the common case and keeps the API simple; multi-table batches can layer on later. Limits are validated client-side and raise `InvalidConfig`. Unprocessed keys/requests are returned to the caller for explicit re-drive instead of being auto-retried: this matches the pagination philosophy (caller follows the continuation) and makes throughput behavior observable in tests.
+
+Ruling: raising-test idiom — `try?` is deprecated; a local `raises(() -> Unit raise) -> Bool` helper replaces Result-wrapping assertions in whitebox tests.
+
+Verification: 37 JavaScript tests passed (`moon check --target js --deny-warn` and `moon check --target native` clean). A harness verified the README batch snippets verbatim against DynamoDB Local 1.25.1: a 4-key batch get returns 3 items with the missing key simply absent (unprocessed stays empty), and a mixed Put+Delete batch write applies both with an empty leftover. CI (GitHub Actions) runs the same checks plus the mock fixture on every push.

@@ -10,6 +10,7 @@
 ## 功能特性
 
 - **核心操作**：`CreateTable`、`DescribeTable`、`PutItem`、`GetItem`、`UpdateItem`、`DeleteItem`、`Query` 和 `Scan`。
+- **批量操作**：`batch_get_item` 单次读取最多 100 个键，`batch_write_item` 单次应用最多 25 个写入；DynamoDB 未处理的请求会原样返回，交给调用方显式重驱动。
 - **完整的 DynamoDB 属性类型**：`S`、`N`、`B`、`BOOL`、`NULL`、`L`、`M`、`SS`、`NS`、`BS` 全部映射到一个类型化的 `AttributeValue` 枚举。数字始终以十进制字符串表示，全程不经过浮点数，不会有精度损失。
 - **条件写入与过滤查询**：条件表达式、键表达式和过滤表达式由你编写，客户端负责携带类型化的表达式占位值。
 - **二级索引**：`query` 和 `scan` 都可通过 `index_name` 指向本地或全局二级索引，`descending` 反转读取顺序，`consistent_read` 强制基表强一致读。
@@ -232,6 +233,33 @@ while true {
 
 过滤发生在 `limit` 计数之后，因此某一页可能为空而 `last_evaluated_key` 仍然存在——持续跟随它直到 `None`。
 
+### 批量读写
+
+`batch_get_item` 单次最多读取 100 个键：不存在的键只是不在 `items` 里出现，而 DynamoDB 未能处理的键（通常是节流）会出现在 `unprocessed_keys` 中，等待下一次调用重驱动。`batch_write_item` 单次最多应用 25 个写入，返回未能处理的请求：
+
+```moonbit
+let batch = db.batch_get_item("Books", [key1, key2, key3])
+for item in batch.items {
+  ignore(item)
+}
+let pending = batch.unprocessed_keys // 如有，交给下一次调用重驱动
+
+let leftover = db.batch_write_item("Books", [
+  Put(
+    Map([
+      ("pk", @moondynamo.Text("book#4")),
+      ("pages", @moondynamo.Number("80")),
+    ]),
+  ),
+  Delete(key1),
+])
+guard leftover.is_empty() else {
+  fail("重驱动 leftover 中的请求")
+}
+```
+
+批量写入不是原子操作，且同一次调用不能触碰同一个条目两次。
+
 ### 查询与分页
 
 ```moonbit
@@ -303,9 +331,9 @@ pub(all) suberror DynamoError {
 
 ## 测试与验证
 
-- **28 个单元测试**（`moon test --target js`）覆盖属性值往返转换、请求构造与签名、带名称占位符的表达式负载、`UpdateItem` 负载与响应解析、`ReturnValues` 映射、索引与 Scan 负载、响应与错误解析、分页请求负载，以及重试判定谓词。
+- **37 个单元测试**（`moon test --target js`）覆盖属性值往返转换、请求构造与签名、带名称占位符的表达式负载、`UpdateItem` 负载与响应解析、`ReturnValues` 映射、索引与 Scan 负载、批量负载与上限校验及未处理键/请求解析、响应与错误解析、分页请求负载，以及重试判定谓词。
 - **自带验证的 HTTP fixture**（[scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)）走真实 HTTP 往返，并独立重算每一次 SigV4 签名——签名实现一旦漂移，测试会立即失败。场景现已包含带 `ReturnValues=ALL_NEW` 的 `UpdateItem`、通过 `#name` 占位符的过滤 `Query`，以及 `Scan`。
-- **已对 DynamoDB Local 1.25.1 做真机端到端验证**：`CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → Scan → DeleteItem → GetItem`，包括用真实的 `ConditionalCheckFailedException` 验证条件写入拒绝、通过 `LastEvaluatedKey` 完成多页 `Query` 遍历、为保留字属性使用 `#name` 占位符，以及对真实全局二级索引的 `Query`（`index_name` + `descending`）和带过滤的分页 `Scan`。
+- **已对 DynamoDB Local 1.25.1 做真机端到端验证**：`CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → Scan → DeleteItem → GetItem`，包括用真实的 `ConditionalCheckFailedException` 验证条件写入拒绝、通过 `LastEvaluatedKey` 完成多页 `Query` 遍历、为保留字属性使用 `#name` 占位符、对真实全局二级索引的 `Query`（`index_name` + `descending`）、带过滤的分页 `Scan`，以及 `batch_get_item` / `batch_write_item` 真机运行——确认缺失键是"缺席"而非"未处理"，且已处理的写入真实生效。
 
 ### 平台状态
 
@@ -325,7 +353,7 @@ pub(all) suberror DynamoError {
 - 端点必须是不带路径的 origin；暂不支持 IPv6 主机名。
 - 值占位符（`:name`）与名称占位符（`#name`）均已支持；暂无程序化表达式生成器。
 - 重试策略固定——2 次重试、100 ms 起倍增、上限 2 s，不支持抖动或按客户端调参。
-- 暂无 Batch*、Transact*、Streams、PartiQL 或自动建模。
+- 暂无 Transact*、Streams、PartiQL 或自动建模。批量助手是 AWS 多表线格式之上的单表封装。
 - `create_table` 只能创建字符串键的按需计费表；带索引或其他结构的表需在建表工具中预先创建。
 
 ## 许可证

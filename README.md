@@ -10,6 +10,7 @@ A typed Amazon DynamoDB client for MoonBit. MoonDynamo talks the DynamoDB JSON A
 ## Features
 
 - **Core operations**: `CreateTable`, `DescribeTable`, `PutItem`, `GetItem`, `UpdateItem`, `DeleteItem`, `Query`, and `Scan`.
+- **Batch operations**: `batch_get_item` reads up to 100 keys in one round trip and `batch_write_item` applies up to 25 puts/deletes; whatever DynamoDB could not process comes back for an explicit re-drive.
 - **Every DynamoDB attribute type**: `S`, `N`, `B`, `BOOL`, `NULL`, `L`, `M`, `SS`, `NS`, and `BS` map to one typed `AttributeValue` enum. Numbers stay as decimal strings end to end, so no precision is lost through floating point.
 - **Conditional writes and filtered queries**: you write condition, key-condition, and filter expressions; the client sends typed expression-attribute values with them.
 - **Secondary indexes**: point `query` or `scan` at any local or global secondary index with `index_name`, read oldest-first with `descending`, and force strongly consistent base-table reads with `consistent_read`.
@@ -232,6 +233,33 @@ while true {
 
 The filter applies after `limit` is counted, so a page can come back empty while `last_evaluated_key` is still set — keep following it until `None`.
 
+### Batch reads and writes
+
+`batch_get_item` fetches up to 100 keys per call; keys that do not exist are simply absent from `items`, while keys DynamoDB could not process (usually throttled) come back in `unprocessed_keys` for a follow-up call. `batch_write_item` applies up to 25 puts and deletes per call and returns the requests it could not process:
+
+```moonbit
+let batch = db.batch_get_item("Books", [key1, key2, key3])
+for item in batch.items {
+  ignore(item)
+}
+let pending = batch.unprocessed_keys // re-drive these, if any
+
+let leftover = db.batch_write_item("Books", [
+  Put(
+    Map([
+      ("pk", @moondynamo.Text("book#4")),
+      ("pages", @moondynamo.Number("80")),
+    ]),
+  ),
+  Delete(key1),
+])
+guard leftover.is_empty() else {
+  fail("re-drive the requests in leftover")
+}
+```
+
+A batch write is not atomic and cannot touch the same item twice in one call.
+
 ### Query with pagination
 
 ```moonbit
@@ -303,9 +331,9 @@ pub(all) suberror DynamoError {
 
 ## How it is tested
 
-- **28 unit tests** (`moon test --target js`) cover attribute round-trips, request construction and signing, expression payloads with name placeholders, `UpdateItem` payloads and response parsing, the `ReturnValues` mapping, index and scan payloads, response and error parsing, pagination payloads, and the retry decision predicate.
+- **37 unit tests** (`moon test --target js`) cover attribute round-trips, request construction and signing, expression payloads with name placeholders, `UpdateItem` payloads and response parsing, the `ReturnValues` mapping, index and scan payloads, batch payloads and limits with unprocessed-key/request parsing, response and error parsing, pagination payloads, and the retry decision predicate.
 - **A self-verifying HTTP fixture** ([scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)) exercises a real HTTP round trip and independently recomputes every SigV4 signature, so signing drift cannot pass silently. Its scenario now includes `UpdateItem` with `ReturnValues=ALL_NEW`, a filtered `Query` via a `#name` placeholder, and a `Scan`.
-- **Verified against DynamoDB Local 1.25.1** end to end: `CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → Scan → DeleteItem → GetItem`, including conditional-write rejection with a real `ConditionalCheckFailedException`, multi-page `Query` walks through `LastEvaluatedKey`, `#name` placeholders for reserved-word attributes, and a `Query` against a real global secondary index (`index_name` + `descending`) plus a filtered, paged `Scan`.
+- **Verified against DynamoDB Local 1.25.1** end to end: `CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → Scan → DeleteItem → GetItem`, including conditional-write rejection with a real `ConditionalCheckFailedException`, multi-page `Query` walks through `LastEvaluatedKey`, `#name` placeholders for reserved-word attributes, a `Query` against a real global secondary index (`index_name` + `descending`) plus a filtered, paged `Scan`, and `batch_get_item` / `batch_write_item` runs confirming that missing keys are absent (not unprocessed) while processed writes take effect.
 
 ### Platform status
 
@@ -325,7 +353,7 @@ Two thin layers:
 - The endpoint must be an origin without a path; no IPv6 hostnames yet.
 - Value placeholders (`:name`) and name placeholders (`#name`) are supported; programmatic expression builders are not (yet).
 - The retry policy is fixed — 2 retries, 100 ms doubling up to 2 s, no jitter or per-client tuning.
-- No Batch*, Transact*, Streams, PartiQL, or schema modeling yet.
+- No Transact*, Streams, PartiQL, or schema modeling yet. The batch helpers are single-table wrappers over the multi-table AWS wire format.
 - `create_table` only creates on-demand tables with string keys; tables with indexes or other shapes need to be created out of band.
 
 ## License

@@ -46,9 +46,19 @@ pub fn AttributeValue::equal(Self, Self) -> Bool
 pub fn AttributeValue::not_equal(Self, Self) -> Bool
 pub fn AttributeValue::to_repr(Self) -> @debug.Repr
 
+pub(all) struct BatchGetResult {
+  items : Array[Map[String, AttributeValue]]
+  unprocessed_keys : Array[Map[String, AttributeValue]]
+} derive(Eq, @debug.Debug)
+pub fn BatchGetResult::equal(Self, Self) -> Bool
+pub fn BatchGetResult::not_equal(Self, Self) -> Bool
+pub fn BatchGetResult::to_repr(Self) -> @debug.Repr
+
 pub struct Client {
   config : Config
 }
+pub async fn Client::batch_get_item(Self, String, Array[Map[String, AttributeValue]], consistent_read? : Bool) -> BatchGetResult
+pub async fn Client::batch_write_item(Self, String, Array[WriteRequest]) -> Array[WriteRequest]
 pub async fn Client::create_table(Self, String, String, sort_key? : String) -> Json
 pub async fn Client::delete_item(Self, String, Map[String, AttributeValue], condition_expression? : String, expression_attribute_values? : Map[String, AttributeValue], expression_attribute_names? : Map[String, String]) -> Unit
 pub async fn Client::describe_table(Self, String) -> Json
@@ -92,6 +102,14 @@ pub(all) enum ReturnValues {
 pub fn ReturnValues::equal(Self, Self) -> Bool
 pub fn ReturnValues::not_equal(Self, Self) -> Bool
 pub fn ReturnValues::to_repr(Self) -> @debug.Repr
+
+pub(all) enum WriteRequest {
+  Put(Map[String, AttributeValue])
+  Delete(Map[String, AttributeValue])
+} derive(Eq, @debug.Debug)
+pub fn WriteRequest::equal(Self, Self) -> Bool
+pub fn WriteRequest::not_equal(Self, Self) -> Bool
+pub fn WriteRequest::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 pub type Item = Map[String, AttributeValue]

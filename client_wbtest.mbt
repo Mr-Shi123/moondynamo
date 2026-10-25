@@ -262,3 +262,123 @@ test "retry policy covers throttling and transient statuses" {
 test "missing item response means no match" {
   assert_eq(parse_get_item(@json.parse("{}")), None)
 }
+
+///|
+test "batch get payload wraps keys in the multi-table request shape" {
+  let payload = batch_get_payload(
+    "books",
+    [Map([("pk", Text("book#1"))]), Map([("pk", Text("book#2"))])],
+    consistent_read=None,
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"RequestItems\":{\"books\":{\"Keys\":[{\"pk\":{\"S\":\"book#1\"}},{\"pk\":{\"S\":\"book#2\"}}]}}}",
+  )
+}
+
+///|
+test "batch get payload can request a consistent read" {
+  let payload = batch_get_payload(
+    "books",
+    [Map([("pk", Text("book#1"))])],
+    consistent_read=Some(true),
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"RequestItems\":{\"books\":{\"Keys\":[{\"pk\":{\"S\":\"book#1\"}}],\"ConsistentRead\":true}}}",
+  )
+}
+
+///|
+/// Returns whether the body raised any error.
+fn raises(body : () -> Unit raise) -> Bool {
+  try {
+    body()
+    false
+  } catch {
+    _ => true
+  }
+}
+
+///|
+test "batch get rejects empty and oversized key lists" {
+  let empty : Array[Item] = []
+  assert_eq(
+    raises(() => {
+      batch_get_payload("books", empty, consistent_read=None) |> ignore
+    }),
+    true,
+  )
+  let too_many : Array[Item] = Array::make(101, Map([("pk", Text("book#1"))]))
+  assert_eq(
+    raises(() => {
+      batch_get_payload("books", too_many, consistent_read=None) |> ignore
+    }),
+    true,
+  )
+}
+
+///|
+test "batch write payload carries put and delete requests" {
+  let payload = batch_write_payload("books", [
+    Put(Map([("pk", Text("book#9")), ("pages", Number("42"))])),
+    Delete(Map([("pk", Text("book#1"))])),
+  ])
+  assert_eq(
+    payload.stringify(),
+    "{\"RequestItems\":{\"books\":[{\"PutRequest\":{\"Item\":{\"pk\":{\"S\":\"book#9\"},\"pages\":{\"N\":\"42\"}}}},{\"DeleteRequest\":{\"Key\":{\"pk\":{\"S\":\"book#1\"}}}}]}}",
+  )
+}
+
+///|
+test "batch write rejects empty and oversized request lists" {
+  let empty : Array[WriteRequest] = []
+  assert_eq(raises(() => batch_write_payload("books", empty) |> ignore), true)
+  let too_many : Array[WriteRequest] = Array::make(
+    26,
+    Delete(Map([("pk", Text("book#1"))])),
+  )
+  assert_eq(
+    raises(() => batch_write_payload("books", too_many) |> ignore),
+    true,
+  )
+}
+
+///|
+test "batch get result separates items from unprocessed keys" {
+  let result = parse_batch_get_result(
+    "books",
+    @json.parse(
+      "{\"Responses\":{\"books\":[{\"pk\":{\"S\":\"book#1\"}}]},\"UnprocessedKeys\":{\"books\":{\"Keys\":[{\"pk\":{\"S\":\"book#2\"}}]}}}",
+    ),
+  )
+  assert_eq(result.items, [Map([("pk", Text("book#1"))])])
+  assert_eq(result.unprocessed_keys, [Map([("pk", Text("book#2"))])])
+}
+
+///|
+test "batch get result tolerates missing sections" {
+  let result = parse_batch_get_result("books", @json.parse("{}"))
+  assert_eq(result.items.length(), 0)
+  assert_eq(result.unprocessed_keys.length(), 0)
+}
+
+///|
+test "batch write result returns unprocessed put and delete requests" {
+  let unprocessed = parse_batch_write_result(
+    "books",
+    @json.parse(
+      "{\"UnprocessedItems\":{\"books\":[{\"PutRequest\":{\"Item\":{\"pk\":{\"S\":\"book#8\"}}}},{\"DeleteRequest\":{\"Key\":{\"pk\":{\"S\":\"book#7\"}}}}]}}",
+    ),
+  )
+  assert_eq(unprocessed, [
+    Put(Map([("pk", Text("book#8"))])),
+    Delete(Map([("pk", Text("book#7"))])),
+  ])
+}
+
+///|
+test "batch write result is empty without unprocessed items" {
+  let unprocessed = parse_batch_write_result("books", @json.parse("{}"))
+  assert_eq(unprocessed.length(), 0)
+}
