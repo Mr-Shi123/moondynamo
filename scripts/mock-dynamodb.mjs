@@ -98,6 +98,10 @@ const server = http.createServer(async (request, response) => {
         }
         send(response, 200, { Items: item ? [item] : [], Count: item ? 1 : 0, ScannedCount: item ? 1 : 0 });
         break;
+      case 'Scan':
+        if (Object.keys(body).length !== 1) throw new Error('invalid Scan request');
+        send(response, 200, { Items: item ? [item] : [], Count: item ? 1 : 0, ScannedCount: item ? 1 : 0 });
+        break;
       case 'DeleteItem':
         if (body.Key?.pk?.S !== 'book#1') throw new Error('invalid DeleteItem key');
         item = null;
@@ -106,7 +110,7 @@ const server = http.createServer(async (request, response) => {
       default:
         throw new Error(`unexpected action ${action}`);
     }
-    if (actions.join(',') === 'CreateTable,DescribeTable,PutItem,GetItem,UpdateItem,Query,DeleteItem,GetItem') {
+    if (actions.join(',') === 'CreateTable,DescribeTable,PutItem,GetItem,UpdateItem,Query,Scan,DeleteItem,GetItem') {
       console.log('HTTP integration fixture passed: ' + actions.join(' → '));
       server.close();
     }

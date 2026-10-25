@@ -58,6 +58,9 @@ test "query payload sends the pagination key" {
     "pk = :pk",
     Map([(":pk", Text("book#1"))]),
     filter_expression=None,
+    index_name=None,
+    descending=None,
+    consistent_read=None,
     expression_attribute_names=Map([]),
     exclusive_start_key=Some(Map([("pk", Text("book#0"))])),
     limit=Some(10),
@@ -75,6 +78,9 @@ test "query payload sends filter expression and name placeholders" {
     "pk = :pk",
     Map([(":pk", Text("user#1")), (":st", Text("active"))]),
     filter_expression=Some("#st = :st"),
+    index_name=None,
+    descending=None,
+    consistent_read=None,
     expression_attribute_names=Map([("#st", "status")]),
     exclusive_start_key=None,
     limit=None,
@@ -82,6 +88,79 @@ test "query payload sends filter expression and name placeholders" {
   assert_eq(
     payload.stringify(),
     "{\"TableName\":\"books\",\"KeyConditionExpression\":\"pk = :pk\",\"FilterExpression\":\"#st = :st\",\"ExpressionAttributeValues\":{\":pk\":{\"S\":\"user#1\"},\":st\":{\"S\":\"active\"}},\"ExpressionAttributeNames\":{\"#st\":\"status\"}}",
+  )
+}
+
+///|
+test "query payload targets an index newest-first" {
+  let payload = query_payload(
+    "books",
+    "#st = :st",
+    Map([(":st", Text("active"))]),
+    filter_expression=None,
+    index_name=Some("status-index"),
+    descending=Some(true),
+    consistent_read=None,
+    expression_attribute_names=Map([("#st", "status")]),
+    exclusive_start_key=None,
+    limit=None,
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"TableName\":\"books\",\"KeyConditionExpression\":\"#st = :st\",\"IndexName\":\"status-index\",\"ExpressionAttributeValues\":{\":st\":{\"S\":\"active\"}},\"ExpressionAttributeNames\":{\"#st\":\"status\"},\"ScanIndexForward\":false}",
+  )
+}
+
+///|
+test "query payload forces a consistent read when asked" {
+  let payload = query_payload(
+    "books",
+    "pk = :pk",
+    Map([(":pk", Text("book#1"))]),
+    filter_expression=None,
+    index_name=None,
+    descending=None,
+    consistent_read=Some(true),
+    expression_attribute_names=Map([]),
+    exclusive_start_key=None,
+    limit=None,
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"TableName\":\"books\",\"KeyConditionExpression\":\"pk = :pk\",\"ExpressionAttributeValues\":{\":pk\":{\"S\":\"book#1\"}},\"ConsistentRead\":true}",
+  )
+}
+
+///|
+test "scan payload starts from just the table name" {
+  let payload = scan_payload(
+    "books",
+    filter_expression=None,
+    expression_attribute_values=Map([]),
+    expression_attribute_names=Map([]),
+    index_name=None,
+    consistent_read=None,
+    exclusive_start_key=None,
+    limit=None,
+  )
+  assert_eq(payload.stringify(), "{\"TableName\":\"books\"}")
+}
+
+///|
+test "scan payload carries filter, index, and paging" {
+  let payload = scan_payload(
+    "books",
+    filter_expression=Some("pages <= :max"),
+    expression_attribute_values=Map([(":max", Number("500"))]),
+    expression_attribute_names=Map([]),
+    index_name=Some("pages-index"),
+    consistent_read=Some(true),
+    exclusive_start_key=Some(Map([("pk", Text("book#9"))])),
+    limit=Some(100),
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"TableName\":\"books\",\"IndexName\":\"pages-index\",\"FilterExpression\":\"pages <= :max\",\"ExpressionAttributeValues\":{\":max\":{\"N\":\"500\"}},\"ExclusiveStartKey\":{\"pk\":{\"S\":\"book#9\"}},\"Limit\":100,\"ConsistentRead\":true}",
   )
 }
 

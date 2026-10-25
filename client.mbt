@@ -153,6 +153,9 @@ fn query_payload(
   key_condition_expression : String,
   expression_attribute_values : Item,
   filter_expression~ : String?,
+  index_name~ : String?,
+  descending~ : Bool?,
+  consistent_read~ : Bool?,
   expression_attribute_names~ : Map[String, String],
   exclusive_start_key~ : Item?,
   limit~ : Int?,
@@ -161,6 +164,9 @@ fn query_payload(
     ("TableName", Json::string(table)),
     ("KeyConditionExpression", Json::string(key_condition_expression)),
   ])
+  if index_name is Some(name) {
+    fields["IndexName"] = Json::string(name)
+  }
   if filter_expression is Some(expression) {
     fields["FilterExpression"] = Json::string(expression)
   }
@@ -175,6 +181,52 @@ fn query_payload(
   }
   if limit is Some(count) {
     fields["Limit"] = @json.to_json(count)
+  }
+  if descending is Some(true) {
+    fields["ScanIndexForward"] = Json::boolean(false)
+  }
+  if consistent_read is Some(true) {
+    fields["ConsistentRead"] = Json::boolean(true)
+  }
+  Json::object(fields)
+}
+
+///|
+fn scan_payload(
+  table : String,
+  filter_expression~ : String?,
+  expression_attribute_values~ : Item,
+  expression_attribute_names~ : Map[String, String],
+  index_name~ : String?,
+  consistent_read~ : Bool?,
+  exclusive_start_key~ : Item?,
+  limit~ : Int?,
+) -> Json {
+  let fields : Map[String, Json] = Map([("TableName", Json::string(table))])
+  if index_name is Some(name) {
+    fields["IndexName"] = Json::string(name)
+  }
+  if filter_expression is Some(expression) {
+    fields["FilterExpression"] = Json::string(expression)
+  }
+  if !expression_attribute_values.is_empty() {
+    fields["ExpressionAttributeValues"] = encode_item(
+      expression_attribute_values,
+    )
+  }
+  if !expression_attribute_names.is_empty() {
+    fields["ExpressionAttributeNames"] = encode_names(
+      expression_attribute_names,
+    )
+  }
+  if exclusive_start_key is Some(key) {
+    fields["ExclusiveStartKey"] = encode_item(key)
+  }
+  if limit is Some(count) {
+    fields["Limit"] = @json.to_json(count)
+  }
+  if consistent_read is Some(true) {
+    fields["ConsistentRead"] = Json::boolean(true)
   }
   Json::object(fields)
 }
@@ -372,6 +424,9 @@ pub async fn Client::query(
   key_condition_expression : String,
   expression_attribute_values : Item,
   filter_expression? : String,
+  index_name? : String,
+  descending? : Bool,
+  consistent_read? : Bool,
   exclusive_start_key? : Item,
   limit? : Int,
   expression_attribute_names? : Map[String, String],
@@ -388,7 +443,51 @@ pub async fn Client::query(
         key_condition_expression,
         expression_attribute_values,
         filter_expression~,
+        index_name~,
+        descending~,
+        consistent_read~,
         expression_attribute_names=names,
+        exclusive_start_key~,
+        limit~,
+      ),
+    ),
+  )
+}
+
+///|
+/// Read the items of a table or, via `index_name`, of a secondary index,
+/// page by page. `filter_expression` drops items server-side; because the
+/// filter applies after `limit` is counted, a page can come back empty while
+/// `last_evaluated_key` is still present — keep following it until `None`.
+pub async fn Client::scan(
+  self : Client,
+  table : String,
+  filter_expression? : String,
+  expression_attribute_values? : Item,
+  expression_attribute_names? : Map[String, String],
+  index_name? : String,
+  consistent_read? : Bool,
+  exclusive_start_key? : Item,
+  limit? : Int,
+) -> QueryResult {
+  let values = match expression_attribute_values {
+    Some(values) => values
+    None => Map([])
+  }
+  let names = match expression_attribute_names {
+    Some(names) => names
+    None => Map([])
+  }
+  parse_query_result(
+    self.call(
+      "Scan",
+      scan_payload(
+        table,
+        filter_expression~,
+        expression_attribute_values=values,
+        expression_attribute_names=names,
+        index_name~,
+        consistent_read~,
         exclusive_start_key~,
         limit~,
       ),

@@ -55,7 +55,8 @@ pub async fn Client::describe_table(Self, String) -> Json
 pub async fn Client::get_item(Self, String, Map[String, AttributeValue], consistent_read? : Bool) -> Map[String, AttributeValue]?
 pub fn Client::new(Config) -> Self
 pub async fn Client::put_item(Self, String, Map[String, AttributeValue], condition_expression? : String, expression_attribute_values? : Map[String, AttributeValue], expression_attribute_names? : Map[String, String]) -> Unit
-pub async fn Client::query(Self, String, String, Map[String, AttributeValue], filter_expression? : String, exclusive_start_key? : Map[String, AttributeValue], limit? : Int, expression_attribute_names? : Map[String, String]) -> QueryResult
+pub async fn Client::query(Self, String, String, Map[String, AttributeValue], filter_expression? : String, index_name? : String, descending? : Bool, consistent_read? : Bool, exclusive_start_key? : Map[String, AttributeValue], limit? : Int, expression_attribute_names? : Map[String, String]) -> QueryResult
+pub async fn Client::scan(Self, String, filter_expression? : String, expression_attribute_values? : Map[String, AttributeValue], expression_attribute_names? : Map[String, String], index_name? : String, consistent_read? : Bool, exclusive_start_key? : Map[String, AttributeValue], limit? : Int) -> QueryResult
 pub async fn Client::update_item(Self, String, Map[String, AttributeValue], String, expression_attribute_values? : Map[String, AttributeValue], expression_attribute_names? : Map[String, String], return_values? : ReturnValues) -> Map[String, AttributeValue]?
 
 pub(all) struct Config {

@@ -16,10 +16,13 @@ async fn main {
     error => raise error
   }
   db.describe_table("MoonDynamoExample") |> ignore
+  // "status" collides with a DynamoDB reserved word in expressions, so the
+  // query below reaches it through a #name placeholder.
   let item : @lib.Item = Map([
     ("pk", @lib.Text("book#1")),
     ("title", @lib.Text("The MoonBit Book")),
     ("pages", @lib.Number("128")),
+    ("status", @lib.Text("active")),
   ])
   db.put_item("MoonDynamoExample", item)
   let key : @lib.Item = Map([("pk", @lib.Text("book#1"))])
@@ -28,12 +31,26 @@ async fn main {
   guard found_item.get("title") == Some(@lib.Text("The MoonBit Book")) else {
     fail("GetItem returned an unexpected item")
   }
+  let updated = db.update_item(
+    "MoonDynamoExample",
+    key,
+    "SET pages = :pages",
+    expression_attribute_values=Map([(":pages", @lib.Number("200"))]),
+    return_values=AllNew,
+  )
+  guard updated is Some(book) && book.get("pages") == Some(@lib.Number("200")) else {
+    fail("UpdateItem did not apply the new page count")
+  }
   let result = db.query(
     "MoonDynamoExample",
     "pk = :pk",
-    Map([(":pk", @lib.Text("book#1"))]),
+    Map([(":pk", @lib.Text("book#1")), (":st", @lib.Text("active"))]),
+    filter_expression="#st = :st",
+    expression_attribute_names=Map([("#st", "status")]),
   )
   guard result.items.length() == 1 else { fail("Query returned no item") }
+  let scanned = db.scan("MoonDynamoExample")
+  guard scanned.items.length() == 1 else { fail("Scan returned no item") }
   db.delete_item("MoonDynamoExample", key)
   guard db.get_item("MoonDynamoExample", key) is None else {
     fail("DeleteItem did not remove the item")
