@@ -2,6 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+[![CI](https://github.com/Mr-Shi123/moondynamo/actions/workflows/ci.yml/badge.svg)](https://github.com/Mr-Shi123/moondynamo/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 A typed Amazon DynamoDB client for MoonBit. MoonDynamo talks the DynamoDB JSON API directly and signs every request with AWS Signature Version 4, so it works against real AWS endpoints and [DynamoDB Local](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.html) alike — useful in MoonBit applications and in local integration tests.

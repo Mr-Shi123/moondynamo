@@ -2,6 +2,7 @@
 
 [English](README.md) | 简体中文
 
+[![CI](https://github.com/Mr-Shi123/moondynamo/actions/workflows/ci.yml/badge.svg)](https://github.com/Mr-Shi123/moondynamo/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 一个类型化的 Amazon DynamoDB 客户端，用 MoonBit 编写。MoonDynamo 直接使用 DynamoDB JSON API，并用 AWS Signature Version 4 签名每一个请求，因此既可以对接真实的 AWS 端点，也可以对接 [DynamoDB Local](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.html)——适合在 MoonBit 应用中使用，也适合做本地集成测试。
