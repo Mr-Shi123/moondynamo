@@ -8,9 +8,10 @@ A typed Amazon DynamoDB client for MoonBit. MoonDynamo talks the DynamoDB JSON A
 
 ## Features
 
-- **Core operations**: `CreateTable`, `DescribeTable`, `PutItem`, `GetItem`, `UpdateItem`, `DeleteItem`, and `Query`.
+- **Core operations**: `CreateTable`, `DescribeTable`, `PutItem`, `GetItem`, `UpdateItem`, `DeleteItem`, `Query`, and `Scan`.
 - **Every DynamoDB attribute type**: `S`, `N`, `B`, `BOOL`, `NULL`, `L`, `M`, `SS`, `NS`, and `BS` map to one typed `AttributeValue` enum. Numbers stay as decimal strings end to end, so no precision is lost through floating point.
 - **Conditional writes and filtered queries**: you write condition, key-condition, and filter expressions; the client sends typed expression-attribute values with them.
+- **Secondary indexes**: point `query` or `scan` at any local or global secondary index with `index_name`, read oldest-first with `descending`, and force strongly consistent base-table reads with `consistent_read`.
 - **Reserved-word-safe expressions**: pass `#name` placeholders through `expression_attribute_names`, so attributes called `status`, `size`, or `timestamp` are reachable from any expression.
 - **Partial updates**: `update_item` runs `SET` / `ADD` / `REMOVE` expressions and can hand back the resulting attributes via `ReturnValues`.
 - **Pagination**: `Query` returns `LastEvaluatedKey`; feed it back as `exclusive_start_key` to walk a table page by page.
@@ -50,7 +51,7 @@ moon test --target js
 moon check --target js --deny-warn
 ```
 
-The bundled end-to-end demo ([cmd/main/main.mbt](cmd/main/main.mbt)) creates a table, writes a book, reads it back, updates its page count with `ReturnValues`, runs a filtered query through a `#name` placeholder, deletes the item, and confirms it is gone. The table is left in place so the demo can be re-run.
+The bundled end-to-end demo ([cmd/main/main.mbt](cmd/main/main.mbt)) creates a table, writes a book, reads it back, updates its page count with `ReturnValues`, runs a filtered query through a `#name` placeholder, scans the table, deletes the item, and confirms it is gone. The table is left in place so the demo can be re-run.
 
 **Option A — DynamoDB Local** (recommended):
 
@@ -186,6 +187,50 @@ for book in result.items {
 }
 ```
 
+### Query a secondary index
+
+`query` accepts `index_name`, so the same key-condition style works against local and global secondary indexes. `descending` flips the read order (`ScanIndexForward=false`); `consistent_read` forces a strongly consistent read (base table only — DynamoDB does not offer it on global indexes):
+
+```moonbit
+let recent = db.query(
+  "Books",
+  "#st = :st",
+  Map([(":st", @moondynamo.Text("active"))]),
+  index_name="status-index",
+  descending=true,
+  expression_attribute_names=Map([("#st", "status")]),
+)
+for book in recent.items {
+  ignore(book) // newest active books first
+}
+```
+
+### Scan a table
+
+`scan` reads every item of a table or index, with the same expression, name-placeholder, and paging options as `query`:
+
+```moonbit
+let mut exclusive_start_key : @moondynamo.Item? = None
+while true {
+  let page = db.scan(
+    "Books",
+    filter_expression="pages <= :max",
+    expression_attribute_values=Map([(":max", @moondynamo.Number("500"))]),
+    exclusive_start_key?,
+    limit=100,
+  )
+  for book in page.items {
+    ignore(book) // do something with each matching item
+  }
+  match page.last_evaluated_key {
+    Some(key) => exclusive_start_key = Some(key)
+    None => break
+  }
+}
+```
+
+The filter applies after `limit` is counted, so a page can come back empty while `last_evaluated_key` is still set — keep following it until `None`.
+
 ### Query with pagination
 
 ```moonbit
@@ -257,9 +302,9 @@ pub(all) suberror DynamoError {
 
 ## How it is tested
 
-- **24 unit tests** (`moon test --target js`) cover attribute round-trips, request construction and signing, expression payloads with name placeholders, `UpdateItem` payloads and response parsing, the `ReturnValues` mapping, response and error parsing, pagination payloads, and the retry decision predicate.
-- **A self-verifying HTTP fixture** ([scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)) exercises a real HTTP round trip and independently recomputes every SigV4 signature, so signing drift cannot pass silently. Its scenario now includes `UpdateItem` with `ReturnValues=ALL_NEW` and a filtered `Query` via a `#name` placeholder.
-- **Verified against DynamoDB Local 1.25.1** end to end: `CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → DeleteItem → GetItem`, including conditional-write rejection with a real `ConditionalCheckFailedException`, multi-page `Query` walks through `LastEvaluatedKey`, and `#name` placeholders for reserved-word attributes.
+- **28 unit tests** (`moon test --target js`) cover attribute round-trips, request construction and signing, expression payloads with name placeholders, `UpdateItem` payloads and response parsing, the `ReturnValues` mapping, index and scan payloads, response and error parsing, pagination payloads, and the retry decision predicate.
+- **A self-verifying HTTP fixture** ([scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)) exercises a real HTTP round trip and independently recomputes every SigV4 signature, so signing drift cannot pass silently. Its scenario now includes `UpdateItem` with `ReturnValues=ALL_NEW`, a filtered `Query` via a `#name` placeholder, and a `Scan`.
+- **Verified against DynamoDB Local 1.25.1** end to end: `CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → Scan → DeleteItem → GetItem`, including conditional-write rejection with a real `ConditionalCheckFailedException`, multi-page `Query` walks through `LastEvaluatedKey`, `#name` placeholders for reserved-word attributes, and a `Query` against a real global secondary index (`index_name` + `descending`) plus a filtered, paged `Scan`.
 
 ### Platform status
 
@@ -279,8 +324,8 @@ Two thin layers:
 - The endpoint must be an origin without a path; no IPv6 hostnames yet.
 - Value placeholders (`:name`) and name placeholders (`#name`) are supported; programmatic expression builders are not (yet).
 - The retry policy is fixed — 2 retries, 100 ms doubling up to 2 s, no jitter or per-client tuning.
-- No Batch*, Transact*, `Scan`, Streams, PartiQL, or schema modeling yet.
-- `create_table` only creates on-demand tables with string keys; other shapes need raw calls.
+- No Batch*, Transact*, Streams, PartiQL, or schema modeling yet.
+- `create_table` only creates on-demand tables with string keys; tables with indexes or other shapes need to be created out of band.
 
 ## License
 

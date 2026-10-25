@@ -8,9 +8,10 @@
 
 ## 功能特性
 
-- **核心操作**：`CreateTable`、`DescribeTable`、`PutItem`、`GetItem`、`UpdateItem`、`DeleteItem` 和 `Query`。
+- **核心操作**：`CreateTable`、`DescribeTable`、`PutItem`、`GetItem`、`UpdateItem`、`DeleteItem`、`Query` 和 `Scan`。
 - **完整的 DynamoDB 属性类型**：`S`、`N`、`B`、`BOOL`、`NULL`、`L`、`M`、`SS`、`NS`、`BS` 全部映射到一个类型化的 `AttributeValue` 枚举。数字始终以十进制字符串表示，全程不经过浮点数，不会有精度损失。
 - **条件写入与过滤查询**：条件表达式、键表达式和过滤表达式由你编写，客户端负责携带类型化的表达式占位值。
+- **二级索引**：`query` 和 `scan` 都可通过 `index_name` 指向本地或全局二级索引，`descending` 反转读取顺序，`consistent_read` 强制基表强一致读。
 - **保留字安全的表达式**：通过 `expression_attribute_names` 传入 `#name` 占位符，`status`、`size`、`timestamp` 这类与保留字冲突的属性名也能在任何表达式中使用。
 - **局部更新**：`update_item` 支持 `SET` / `ADD` / `REMOVE` 表达式，并可通过 `ReturnValues` 拿回更新后的属性。
 - **分页**：`Query` 返回 `LastEvaluatedKey`；把它作为 `exclusive_start_key` 传回，即可逐页遍历表数据。
@@ -50,7 +51,7 @@ moon test --target js
 moon check --target js --deny-warn
 ```
 
-项目自带的端到端示例（[cmd/main/main.mbt](cmd/main/main.mbt)）会建表、写入一本书、读取、用 `ReturnValues` 更新页数、通过 `#name` 占位符执行过滤查询、删除并确认记录已消失。表会保留，方便重复运行。
+项目自带的端到端示例（[cmd/main/main.mbt](cmd/main/main.mbt)）会建表、写入一本书、读取、用 `ReturnValues` 更新页数、通过 `#name` 占位符执行过滤查询、扫描表、删除并确认记录已消失。表会保留，方便重复运行。
 
 **方式一 —— DynamoDB Local**（推荐）：
 
@@ -186,6 +187,50 @@ for book in result.items {
 }
 ```
 
+### 查询二级索引
+
+`query` 接受 `index_name`，同样的键表达式风格可以直接用于本地和全局二级索引。`descending` 反转读取顺序（`ScanIndexForward=false`）；`consistent_read` 强制强一致读（仅基表——DynamoDB 不对全局索引提供强一致读）：
+
+```moonbit
+let recent = db.query(
+  "Books",
+  "#st = :st",
+  Map([(":st", @moondynamo.Text("active"))]),
+  index_name="status-index",
+  descending=true,
+  expression_attribute_names=Map([("#st", "status")]),
+)
+for book in recent.items {
+  ignore(book) // 最新的 active 记录排在前面
+}
+```
+
+### 扫描表
+
+`scan` 逐页读取表或索引的全部条目，支持与 `query` 相同的表达式、名称占位符和分页选项：
+
+```moonbit
+let mut exclusive_start_key : @moondynamo.Item? = None
+while true {
+  let page = db.scan(
+    "Books",
+    filter_expression="pages <= :max",
+    expression_attribute_values=Map([(":max", @moondynamo.Number("500"))]),
+    exclusive_start_key?,
+    limit=100,
+  )
+  for book in page.items {
+    ignore(book) // 对每条命中的记录做处理
+  }
+  match page.last_evaluated_key {
+    Some(key) => exclusive_start_key = Some(key)
+    None => break
+  }
+}
+```
+
+过滤发生在 `limit` 计数之后，因此某一页可能为空而 `last_evaluated_key` 仍然存在——持续跟随它直到 `None`。
+
 ### 查询与分页
 
 ```moonbit
@@ -257,9 +302,9 @@ pub(all) suberror DynamoError {
 
 ## 测试与验证
 
-- **24 个单元测试**（`moon test --target js`）覆盖属性值往返转换、请求构造与签名、带名称占位符的表达式负载、`UpdateItem` 负载与响应解析、`ReturnValues` 映射、响应与错误解析、分页请求负载，以及重试判定谓词。
-- **自带验证的 HTTP fixture**（[scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)）走真实 HTTP 往返，并独立重算每一次 SigV4 签名——签名实现一旦漂移，测试会立即失败。场景现已包含带 `ReturnValues=ALL_NEW` 的 `UpdateItem`，以及通过 `#name` 占位符的过滤 `Query`。
-- **已对 DynamoDB Local 1.25.1 做真机端到端验证**：`CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → DeleteItem → GetItem`，包括用真实的 `ConditionalCheckFailedException` 验证条件写入拒绝、通过 `LastEvaluatedKey` 完成多页 `Query` 遍历，以及为保留字属性使用 `#name` 占位符。
+- **28 个单元测试**（`moon test --target js`）覆盖属性值往返转换、请求构造与签名、带名称占位符的表达式负载、`UpdateItem` 负载与响应解析、`ReturnValues` 映射、索引与 Scan 负载、响应与错误解析、分页请求负载，以及重试判定谓词。
+- **自带验证的 HTTP fixture**（[scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)）走真实 HTTP 往返，并独立重算每一次 SigV4 签名——签名实现一旦漂移，测试会立即失败。场景现已包含带 `ReturnValues=ALL_NEW` 的 `UpdateItem`、通过 `#name` 占位符的过滤 `Query`，以及 `Scan`。
+- **已对 DynamoDB Local 1.25.1 做真机端到端验证**：`CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → Scan → DeleteItem → GetItem`，包括用真实的 `ConditionalCheckFailedException` 验证条件写入拒绝、通过 `LastEvaluatedKey` 完成多页 `Query` 遍历、为保留字属性使用 `#name` 占位符，以及对真实全局二级索引的 `Query`（`index_name` + `descending`）和带过滤的分页 `Scan`。
 
 ### 平台状态
 
@@ -279,8 +324,8 @@ pub(all) suberror DynamoError {
 - 端点必须是不带路径的 origin；暂不支持 IPv6 主机名。
 - 值占位符（`:name`）与名称占位符（`#name`）均已支持；暂无程序化表达式生成器。
 - 重试策略固定——2 次重试、100 ms 起倍增、上限 2 s，不支持抖动或按客户端调参。
-- 暂无 Batch*、Transact*、`Scan`、Streams、PartiQL 或自动建模。
-- `create_table` 只能创建字符串键的按需计费表；其他表结构暂需更底层的调用。
+- 暂无 Batch*、Transact*、Streams、PartiQL 或自动建模。
+- `create_table` 只能创建字符串键的按需计费表；带索引或其他结构的表需在建表工具中预先创建。
 
 ## 许可证
 
