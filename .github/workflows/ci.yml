@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+
+      - name: Update MoonBit dependencies
+        run: |
+          moon version --all
+          moon update
+
+      - name: Check (strict, JS target)
+        run: moon check --target js --deny-warn
+
+      - name: Check (native target)
+        run: moon check --target native
+
+      - name: Test (JS target)
+        run: moon test --target js
+
+      - name: End-to-end demo against the bundled mock fixture
+        run: |
+          node scripts/mock-dynamodb.mjs &
+          sleep 2
+          moon run cmd/main --target js
+          kill %1
