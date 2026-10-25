@@ -1,0 +1,6 @@
+import {
+  "Mr-Shi123/moondynamo" @lib,
+  "moonbitlang/async",
+}
+
+pkgtype(kind: "executable")

@@ -1,0 +1,42 @@
+///|
+/// A small end-to-end example for DynamoDB Local at 127.0.0.1:8000.
+async fn main {
+  let config : @lib.Config = {
+    endpoint: "http://127.0.0.1:8000",
+    region: "us-east-1",
+    credentials: {
+      access_key_id: "local",
+      secret_access_key: "local",
+      session_token: None,
+    },
+  }
+  let db = @lib.Client::new(config)
+  try db.create_table("MoonDynamoExample", "pk") |> ignore catch {
+    @lib.DynamoError::Service(_, "ResourceInUseException", _, _) => ()
+    error => raise error
+  }
+  db.describe_table("MoonDynamoExample") |> ignore
+  let item : @lib.Item = Map([
+    ("pk", @lib.Text("book#1")),
+    ("title", @lib.Text("The MoonBit Book")),
+    ("pages", @lib.Number("128")),
+  ])
+  db.put_item("MoonDynamoExample", item)
+  let key : @lib.Item = Map([("pk", @lib.Text("book#1"))])
+  let found = db.get_item("MoonDynamoExample", key)
+  guard found is Some(found_item) else { fail("GetItem returned no item") }
+  guard found_item.get("title") == Some(@lib.Text("The MoonBit Book")) else {
+    fail("GetItem returned an unexpected item")
+  }
+  let result = db.query(
+    "MoonDynamoExample",
+    "pk = :pk",
+    Map([(":pk", @lib.Text("book#1"))]),
+  )
+  guard result.items.length() == 1 else { fail("Query returned no item") }
+  db.delete_item("MoonDynamoExample", key)
+  guard db.get_item("MoonDynamoExample", key) is None else {
+    fail("DeleteItem did not remove the item")
+  }
+  println("MoonDynamo local example passed")
+}
