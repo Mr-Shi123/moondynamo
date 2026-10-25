@@ -1,0 +1,86 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Mr-Shi123/moondynamo"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn decode_attribute(Json) -> AttributeValue raise CodecError
+
+pub fn decode_item(Json) -> Map[String, AttributeValue] raise CodecError
+
+pub fn encode_attribute(AttributeValue) -> Json
+
+pub fn encode_item(Map[String, AttributeValue]) -> Json
+
+pub fn parse_response(Int, Map[String, String], String) -> Json raise DynamoError
+
+pub fn prepare_request(Config, String, Json, String) -> PreparedRequest raise DynamoError
+
+// Errors
+pub(all) suberror CodecError {
+  InvalidAttribute(String)
+}
+
+pub(all) suberror DynamoError {
+  InvalidConfig(String)
+  InvalidResponse(String)
+  Service(Int, String, String, String?)
+}
+
+// Types and methods
+pub(all) enum AttributeValue {
+  Text(String)
+  Number(String)
+  Binary(Bytes)
+  BoolValue(Bool)
+  NullValue
+  ListValue(Array[AttributeValue])
+  ObjectValue(Map[String, AttributeValue])
+  StringSet(Array[String])
+  NumberSet(Array[String])
+  BinarySet(Array[Bytes])
+} derive(Eq, @debug.Debug)
+pub fn AttributeValue::equal(Self, Self) -> Bool
+pub fn AttributeValue::not_equal(Self, Self) -> Bool
+pub fn AttributeValue::to_repr(Self) -> @debug.Repr
+
+pub struct Client {
+  config : Config
+}
+pub async fn Client::create_table(Self, String, String, sort_key? : String) -> Json
+pub async fn Client::delete_item(Self, String, Map[String, AttributeValue], condition_expression? : String, expression_attribute_values? : Map[String, AttributeValue]) -> Unit
+pub async fn Client::describe_table(Self, String) -> Json
+pub async fn Client::get_item(Self, String, Map[String, AttributeValue], consistent_read? : Bool) -> Map[String, AttributeValue]?
+pub fn Client::new(Config) -> Self
+pub async fn Client::put_item(Self, String, Map[String, AttributeValue], condition_expression? : String, expression_attribute_values? : Map[String, AttributeValue]) -> Unit
+pub async fn Client::query(Self, String, String, Map[String, AttributeValue], exclusive_start_key? : Map[String, AttributeValue], limit? : Int) -> QueryResult
+
+pub(all) struct Config {
+  endpoint : String
+  region : String
+  credentials : Credentials
+}
+
+pub(all) struct Credentials {
+  access_key_id : String
+  secret_access_key : String
+  session_token : String?
+}
+
+pub(all) struct PreparedRequest {
+  url : String
+  headers : Map[String, String]
+  body : String
+}
+
+pub(all) struct QueryResult {
+  items : Array[Map[String, AttributeValue]]
+  last_evaluated_key : Map[String, AttributeValue]?
+}
+
+// Type aliases
+pub type Item = Map[String, AttributeValue]
+
+// Traits
