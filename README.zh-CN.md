@@ -9,14 +9,14 @@
 
 ## 功能特性
 
-- **核心操作**：`CreateTable`、`DescribeTable`、`PutItem`、`GetItem`、`UpdateItem`、`DeleteItem`、`Query` 和 `Scan`。
+- **核心操作**：`CreateTable`、`DescribeTable`、`ListTables`、`PutItem`、`GetItem`、`UpdateItem`、`DeleteItem`、`Query` 和 `Scan`。
 - **批量操作**：`batch_get_item` 单次读取最多 100 个键，`batch_write_item` 单次应用最多 25 个写入；DynamoDB 未处理的请求会原样返回，交给调用方显式重驱动。
 - **完整的 DynamoDB 属性类型**：`S`、`N`、`B`、`BOOL`、`NULL`、`L`、`M`、`SS`、`NS`、`BS` 全部映射到一个类型化的 `AttributeValue` 枚举。数字始终以十进制字符串表示，全程不经过浮点数，不会有精度损失。
 - **条件写入与过滤查询**：条件表达式、键表达式和过滤表达式由你编写，客户端负责携带类型化的表达式占位值。
 - **二级索引**：`query` 和 `scan` 都可通过 `index_name` 指向本地或全局二级索引，`descending` 反转读取顺序，`consistent_read` 强制基表强一致读。
 - **保留字安全的表达式**：通过 `expression_attribute_names` 传入 `#name` 占位符，`status`、`size`、`timestamp` 这类与保留字冲突的属性名也能在任何表达式中使用。
 - **局部更新**：`update_item` 支持 `SET` / `ADD` / `REMOVE` 表达式，并可通过 `ReturnValues` 拿回更新后的属性。
-- **分页**：`Query` 返回 `LastEvaluatedKey`；把它作为 `exclusive_start_key` 传回，即可逐页遍历表数据。
+- **分页**：`Query` 返回 `LastEvaluatedKey`，`ListTables` 返回 `LastEvaluatedTableName`；将标记传回即可获取下一页。
 - **结构化错误**：服务端错误抛出 `DynamoError::Service`，携带 HTTP 状态码、错误代码、错误消息以及本次请求的 `x-amzn-RequestId`。
 - **自动重试**：节流与瞬时服务端故障——429/500/503 状态码以及 `ProvisionedThroughputExceededException` 等错误代码——会先以有上限的指数退避自动重试（2 次，100 ms 起倍增、上限 2 s），之后错误才会暴露给你的代码。
 - **本地优先的配置**：服务地址、区域、凭证（含会话令牌）全部显式传入，连接 DynamoDB Local 无需额外设置。
@@ -53,7 +53,7 @@ moon test --target js
 moon check --target js --deny-warn
 ```
 
-项目自带的端到端示例（[cmd/main/main.mbt](cmd/main/main.mbt)）会建表、写入一本书、读取、用 `ReturnValues` 更新页数、通过 `#name` 占位符执行过滤查询、扫描表、删除并确认记录已消失。表会保留，方便重复运行。
+项目自带的端到端示例（[cmd/main/main.mbt](cmd/main/main.mbt)）会建表、列出表、写入一本书、读取、用 `ReturnValues` 更新页数、通过 `#name` 占位符执行过滤查询、扫描表、删除并确认记录已消失。表会保留，方便重复运行。
 
 **方式一 —— DynamoDB Local**（推荐）：
 
@@ -63,7 +63,7 @@ docker run --rm -p 8000:8000 amazon/dynamodb-local
 moon run cmd/main --target js
 ```
 
-**方式二 —— 自带 mock 服务**：一个零依赖的测试服务（[scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)），无需 Docker 即可监听 `127.0.0.1:8000`。它会检查每个请求的内容类型、操作与请求体，并在响应前**独立重算每一次 SigV4 签名**；当预定的七步场景全部通过后自动退出：
+**方式二 —— 自带 mock 服务**：一个零依赖的测试服务（[scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)），无需 Docker 即可监听 `127.0.0.1:8000`。它会检查每个请求的内容类型、操作与请求体，并在响应前**独立重算每一次 SigV4 签名**；当预定的十步场景全部通过后自动退出：
 
 ```bash
 node scripts/mock-dynamodb.mjs
@@ -105,6 +105,23 @@ db.describe_table("Books") |> ignore
 ```
 
 `create_table` 创建按需计费（pay-per-request）的表，使用字符串分区键，并可通过 `sort_key?` 指定可选的字符串排序键。捕获 `ResourceInUseException` 可以让重复执行保持幂等。
+
+### 列出表
+
+```moonbit
+let first = db.list_tables(limit=2)
+for name in first.table_names {
+  println(name)
+}
+if first.last_evaluated_table_name is Some(cursor) {
+  let next = db.list_tables(limit=2, exclusive_start_table_name=cursor)
+  for name in next.table_names {
+    println(name)
+  }
+}
+```
+
+`limit` 可设为 1–100。将返回的分页标记传给下一次请求，直到标记为 `None`；超出范围的页大小会在请求发出前被拒绝。参见 [AWS ListTables API](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_ListTables.html)。
 
 ### 写入与读取
 
@@ -331,8 +348,8 @@ pub(all) suberror DynamoError {
 
 ## 测试与验证
 
-- **37 个单元测试**（`moon test --target js`）覆盖属性值往返转换、请求构造与签名、带名称占位符的表达式负载、`UpdateItem` 负载与响应解析、`ReturnValues` 映射、索引与 Scan 负载、批量负载与上限校验及未处理键/请求解析、响应与错误解析、分页请求负载，以及重试判定谓词。
-- **自带验证的 HTTP fixture**（[scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)）走真实 HTTP 往返，并独立重算每一次 SigV4 签名——签名实现一旦漂移，测试会立即失败。场景现已包含带 `ReturnValues=ALL_NEW` 的 `UpdateItem`、通过 `#name` 占位符的过滤 `Query`，以及 `Scan`。
+- **42 个单元测试**（`moon test --target js`）覆盖属性值往返转换、请求构造与签名、带名称占位符的表达式负载、`UpdateItem` 负载与响应解析、`ReturnValues` 映射、索引与 Scan 负载、批量负载与上限校验及未处理键/请求解析、`ListTables` 分页与参数校验、响应与错误解析，以及重试判定谓词。
+- **自带验证的 HTTP fixture**（[scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)）走真实 HTTP 往返，并独立重算每一次 SigV4 签名——签名实现一旦漂移，测试会立即失败。场景现已包含 `ListTables`、带 `ReturnValues=ALL_NEW` 的 `UpdateItem`、通过 `#name` 占位符的过滤 `Query`，以及 `Scan`。
 - **已对 DynamoDB Local 1.25.1 做真机端到端验证**：`CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → Scan → DeleteItem → GetItem`，包括用真实的 `ConditionalCheckFailedException` 验证条件写入拒绝、通过 `LastEvaluatedKey` 完成多页 `Query` 遍历、为保留字属性使用 `#name` 占位符、对真实全局二级索引的 `Query`（`index_name` + `descending`）、带过滤的分页 `Scan`，以及 `batch_get_item` / `batch_write_item` 真机运行——确认缺失键是"缺席"而非"未处理"，且已处理的写入真实生效。
 
 ### 平台状态

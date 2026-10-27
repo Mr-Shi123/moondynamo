@@ -382,3 +382,60 @@ test "batch write result is empty without unprocessed items" {
   let unprocessed = parse_batch_write_result("books", @json.parse("{}"))
   assert_eq(unprocessed.length(), 0)
 }
+
+///|
+test "list tables request sends page size and continuation name" {
+  let payload = list_tables_payload(
+    limit=Some(2),
+    exclusive_start_table_name=Some("Books"),
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"Limit\":2,\"ExclusiveStartTableName\":\"Books\"}",
+  )
+}
+
+///|
+test "list tables rejects page sizes outside the service range" {
+  for limit in [0, 101] {
+    try
+      list_tables_payload(limit=Some(limit), exclusive_start_table_name=None)
+      |> ignore
+    catch {
+      InvalidConfig(_) => ()
+      _ => fail("expected InvalidConfig for out-of-range ListTables limit")
+    } noraise {
+      _ => fail("out-of-range ListTables limit must fail")
+    }
+  }
+}
+
+///|
+test "list tables response retains the next page marker" {
+  let result = parse_list_tables_result(
+    @json.parse(
+      "{\"TableNames\":[\"Books\",\"Events\"],\"LastEvaluatedTableName\":\"Events\"}",
+    ),
+  )
+  assert_eq(result.table_names, ["Books", "Events"])
+  assert_eq(result.last_evaluated_table_name, Some("Events"))
+}
+
+///|
+test "list tables accepts an empty response page" {
+  let result = parse_list_tables_result(@json.parse("{}"))
+  assert_eq(result.table_names.length(), 0)
+  assert_eq(result.last_evaluated_table_name, None)
+}
+
+///|
+test "list tables rejects malformed names array" {
+  try
+    parse_list_tables_result(@json.parse("{\"TableNames\":42}")) |> ignore
+  catch {
+    InvalidResponse(_) => ()
+    _ => fail("expected InvalidResponse for malformed TableNames")
+  } noraise {
+    _ => fail("malformed TableNames must fail")
+  }
+}

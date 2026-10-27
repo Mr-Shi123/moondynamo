@@ -16,6 +16,10 @@ async fn main {
     error => raise error
   }
   db.describe_table("MoonDynamoExample") |> ignore
+  let tables = db.list_tables(limit=1)
+  guard !tables.table_names.is_empty() else {
+    fail("ListTables returned no tables")
+  }
   // "status" collides with a DynamoDB reserved word in expressions, so the
   // query below reaches it through a #name placeholder.
   let item : @lib.Item = Map([

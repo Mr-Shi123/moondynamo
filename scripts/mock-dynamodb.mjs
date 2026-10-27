@@ -56,7 +56,7 @@ const server = http.createServer(async (request, response) => {
     verifySignature(request, data);
     const body = JSON.parse(data);
     actions.push(action);
-    if (body.TableName !== table) throw new Error('unexpected table');
+    if (action !== 'ListTables' && body.TableName !== table) throw new Error('unexpected table');
     switch (action) {
       case 'CreateTable':
         if (body.BillingMode !== 'PAY_PER_REQUEST' || body.KeySchema?.[0]?.AttributeName !== 'pk') {
@@ -68,6 +68,12 @@ const server = http.createServer(async (request, response) => {
       case 'DescribeTable':
         if (!created) throw new Error('table has not been created');
         send(response, 200, { Table: { TableName: table, TableStatus: 'ACTIVE' } });
+        break;
+      case 'ListTables':
+        if (!created || body.Limit !== 1 || Object.keys(body).length !== 1) {
+          throw new Error('invalid ListTables request');
+        }
+        send(response, 200, { TableNames: [table] });
         break;
       case 'PutItem':
         if (!created || body.Item?.pk?.S !== 'book#1' || body.Item?.pages?.N !== '128') {
@@ -110,7 +116,7 @@ const server = http.createServer(async (request, response) => {
       default:
         throw new Error(`unexpected action ${action}`);
     }
-    if (actions.join(',') === 'CreateTable,DescribeTable,PutItem,GetItem,UpdateItem,Query,Scan,DeleteItem,GetItem') {
+    if (actions.join(',') === 'CreateTable,DescribeTable,ListTables,PutItem,GetItem,UpdateItem,Query,Scan,DeleteItem,GetItem') {
       console.log('HTTP integration fixture passed: ' + actions.join(' → '));
       server.close();
     }

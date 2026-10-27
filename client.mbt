@@ -15,6 +15,12 @@ pub(all) struct QueryResult {
 }
 
 ///|
+pub(all) struct ListTablesResult {
+  table_names : Array[String]
+  last_evaluated_table_name : String?
+}
+
+///|
 /// Result of a `batch_get_item` call: the items DynamoDB did return, plus
 /// the keys it could not process (usually throttled) for the caller to
 /// re-drive in a follow-up call.
@@ -517,6 +523,54 @@ fn parse_query_result(json : Json) -> QueryResult raise {
 }
 
 ///|
+fn list_tables_payload(
+  limit~ : Int?,
+  exclusive_start_table_name~ : String?,
+) -> Json raise {
+  let fields : Map[String, Json] = Map([])
+  if limit is Some(count) {
+    if count < 1 || count > 100 {
+      raise InvalidConfig("ListTables limit must be between 1 and 100")
+    }
+    fields["Limit"] = @json.to_json(count)
+  }
+  if exclusive_start_table_name is Some(name) {
+    fields["ExclusiveStartTableName"] = Json::string(name)
+  }
+  Json::object(fields)
+}
+
+///|
+fn parse_list_tables_result(json : Json) -> ListTablesResult raise {
+  let fields = match json {
+    Object(fields) => fields
+    _ => raise InvalidResponse("ListTables response must be an object")
+  }
+  let table_names : Array[String] = []
+  match fields.get("TableNames") {
+    Some(Array(values)) =>
+      for value in values {
+        match value {
+          String(name) => table_names.push(name)
+          _ =>
+            raise InvalidResponse("ListTables TableNames must contain strings")
+        }
+      }
+    Some(_) => raise InvalidResponse("ListTables TableNames must be an array")
+    None => ()
+  }
+  let last_evaluated_table_name = match fields.get("LastEvaluatedTableName") {
+    Some(String(name)) => Some(name)
+    Some(_) =>
+      raise InvalidResponse(
+        "ListTables LastEvaluatedTableName must be a string",
+      )
+    None => None
+  }
+  { table_names, last_evaluated_table_name, }
+}
+
+///|
 pub async fn Client::put_item(
   self : Client,
   table : String,
@@ -757,6 +811,23 @@ pub async fn Client::describe_table(self : Client, table : String) -> Json {
   self.call(
     "DescribeTable",
     Json::object(Map([("TableName", Json::string(table))])),
+  )
+}
+
+///|
+/// List table names in the configured account and region. Pass the returned
+/// `last_evaluated_table_name` as `exclusive_start_table_name` to fetch the
+/// next page. DynamoDB returns at most 100 names per page.
+pub async fn Client::list_tables(
+  self : Client,
+  limit? : Int,
+  exclusive_start_table_name? : String,
+) -> ListTablesResult {
+  parse_list_tables_result(
+    self.call(
+      "ListTables",
+      list_tables_payload(limit~, exclusive_start_table_name~),
+    ),
   )
 }
 

@@ -9,14 +9,14 @@ A typed Amazon DynamoDB client for MoonBit. MoonDynamo talks the DynamoDB JSON A
 
 ## Features
 
-- **Core operations**: `CreateTable`, `DescribeTable`, `PutItem`, `GetItem`, `UpdateItem`, `DeleteItem`, `Query`, and `Scan`.
+- **Core operations**: `CreateTable`, `DescribeTable`, `ListTables`, `PutItem`, `GetItem`, `UpdateItem`, `DeleteItem`, `Query`, and `Scan`.
 - **Batch operations**: `batch_get_item` reads up to 100 keys in one round trip and `batch_write_item` applies up to 25 puts/deletes; whatever DynamoDB could not process comes back for an explicit re-drive.
 - **Every DynamoDB attribute type**: `S`, `N`, `B`, `BOOL`, `NULL`, `L`, `M`, `SS`, `NS`, and `BS` map to one typed `AttributeValue` enum. Numbers stay as decimal strings end to end, so no precision is lost through floating point.
 - **Conditional writes and filtered queries**: you write condition, key-condition, and filter expressions; the client sends typed expression-attribute values with them.
 - **Secondary indexes**: point `query` or `scan` at any local or global secondary index with `index_name`, read oldest-first with `descending`, and force strongly consistent base-table reads with `consistent_read`.
 - **Reserved-word-safe expressions**: pass `#name` placeholders through `expression_attribute_names`, so attributes called `status`, `size`, or `timestamp` are reachable from any expression.
 - **Partial updates**: `update_item` runs `SET` / `ADD` / `REMOVE` expressions and can hand back the resulting attributes via `ReturnValues`.
-- **Pagination**: `Query` returns `LastEvaluatedKey`; feed it back as `exclusive_start_key` to walk a table page by page.
+- **Pagination**: `Query` returns `LastEvaluatedKey`; `ListTables` returns `LastEvaluatedTableName`. Feed either marker back to fetch the next page.
 - **Structured errors**: service failures raise `DynamoError::Service` carrying the HTTP status, the error code, the message, and the `x-amzn-RequestId` of the failed call.
 - **Automatic retries**: throttling and transient server failures — 429/500/503 statuses and codes like `ProvisionedThroughputExceededException` — are retried with capped exponential backoff (2 retries, 100 ms doubling up to 2 s) before an error ever reaches your code.
 - **Local-first configuration**: endpoint, region, and credentials (including session tokens) are all explicit, so pointing at DynamoDB Local takes no extra setup.
@@ -53,7 +53,7 @@ moon test --target js
 moon check --target js --deny-warn
 ```
 
-The bundled end-to-end demo ([cmd/main/main.mbt](cmd/main/main.mbt)) creates a table, writes a book, reads it back, updates its page count with `ReturnValues`, runs a filtered query through a `#name` placeholder, scans the table, deletes the item, and confirms it is gone. The table is left in place so the demo can be re-run.
+The bundled end-to-end demo ([cmd/main/main.mbt](cmd/main/main.mbt)) creates and lists a table, writes a book, reads it back, updates its page count with `ReturnValues`, runs a filtered query through a `#name` placeholder, scans the table, deletes the item, and confirms it is gone. The table is left in place so the demo can be re-run.
 
 **Option A — DynamoDB Local** (recommended):
 
@@ -63,7 +63,7 @@ docker run --rm -p 8000:8000 amazon/dynamodb-local
 moon run cmd/main --target js
 ```
 
-**Option B — the bundled mock** — a zero-dependency fixture ([scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)) that listens on `127.0.0.1:8000` without Docker. It validates each request's content type, action, and body, and **independently recomputes every SigV4 signature** before responding, then shuts down once the expected seven-step scenario has passed:
+**Option B — the bundled mock** — a zero-dependency fixture ([scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)) that listens on `127.0.0.1:8000` without Docker. It validates each request's content type, action, and body, and **independently recomputes every SigV4 signature** before responding, then shuts down once the expected ten-step scenario has passed:
 
 ```bash
 node scripts/mock-dynamodb.mjs
@@ -105,6 +105,23 @@ db.describe_table("Books") |> ignore
 ```
 
 `create_table` makes an on-demand (pay-per-request) table with a string partition key and, via `sort_key?`, an optional string sort key. Catching `ResourceInUseException` makes re-runs idempotent.
+
+### List tables
+
+```moonbit
+let first = db.list_tables(limit=2)
+for name in first.table_names {
+  println(name)
+}
+if first.last_evaluated_table_name is Some(cursor) {
+  let next = db.list_tables(limit=2, exclusive_start_table_name=cursor)
+  for name in next.table_names {
+    println(name)
+  }
+}
+```
+
+`limit` accepts 1–100 names per page. Continue with the returned marker until it is `None`; the client rejects an out-of-range limit before sending a request. See the [AWS ListTables API](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_ListTables.html).
 
 ### Write and read items
 
@@ -331,8 +348,8 @@ pub(all) suberror DynamoError {
 
 ## How it is tested
 
-- **37 unit tests** (`moon test --target js`) cover attribute round-trips, request construction and signing, expression payloads with name placeholders, `UpdateItem` payloads and response parsing, the `ReturnValues` mapping, index and scan payloads, batch payloads and limits with unprocessed-key/request parsing, response and error parsing, pagination payloads, and the retry decision predicate.
-- **A self-verifying HTTP fixture** ([scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)) exercises a real HTTP round trip and independently recomputes every SigV4 signature, so signing drift cannot pass silently. Its scenario now includes `UpdateItem` with `ReturnValues=ALL_NEW`, a filtered `Query` via a `#name` placeholder, and a `Scan`.
+- **42 unit tests** (`moon test --target js`) cover attribute round-trips, request construction and signing, expression payloads with name placeholders, `UpdateItem` payloads and response parsing, the `ReturnValues` mapping, index and scan payloads, batch payloads and limits with unprocessed-key/request parsing, `ListTables` paging and validation, response and error parsing, and the retry decision predicate.
+- **A self-verifying HTTP fixture** ([scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)) exercises real HTTP round trips and independently recomputes every SigV4 signature, so signing drift cannot pass silently. Its scenario includes `ListTables`, `UpdateItem` with `ReturnValues=ALL_NEW`, a filtered `Query` via a `#name` placeholder, and a `Scan`.
 - **Verified against DynamoDB Local 1.25.1** end to end: `CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → Scan → DeleteItem → GetItem`, including conditional-write rejection with a real `ConditionalCheckFailedException`, multi-page `Query` walks through `LastEvaluatedKey`, `#name` placeholders for reserved-word attributes, a `Query` against a real global secondary index (`index_name` + `descending`) plus a filtered, paged `Scan`, and `batch_get_item` / `batch_write_item` runs confirming that missing keys are absent (not unprocessed) while processed writes take effect.
 
 ### Platform status
