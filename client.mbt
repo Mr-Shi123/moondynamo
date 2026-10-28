@@ -183,6 +183,29 @@ fn key_payload(table : String, key : Item) -> Map[String, Json] {
 }
 
 ///|
+fn get_item_payload(
+  table : String,
+  key : Item,
+  consistent_read~ : Bool,
+  projection_expression~ : String?,
+  expression_attribute_names~ : Map[String, String],
+) -> Json {
+  let fields = key_payload(table, key)
+  if consistent_read {
+    fields["ConsistentRead"] = Json::boolean(true)
+  }
+  if projection_expression is Some(expression) {
+    fields["ProjectionExpression"] = Json::string(expression)
+  }
+  if !expression_attribute_names.is_empty() {
+    fields["ExpressionAttributeNames"] = encode_names(
+      expression_attribute_names,
+    )
+  }
+  Json::object(fields)
+}
+
+///|
 fn query_payload(
   table : String,
   key_condition_expression : String,
@@ -601,17 +624,32 @@ pub async fn Client::put_item(
 }
 
 ///|
+/// Read an item by key. Use `projection_expression` to request only selected
+/// attributes and `expression_attribute_names` for reserved attribute names.
 pub async fn Client::get_item(
   self : Client,
   table : String,
   key : Item,
   consistent_read? : Bool = false,
+  projection_expression? : String,
+  expression_attribute_names? : Map[String, String],
 ) -> Item? {
-  let fields = key_payload(table, key)
-  if consistent_read {
-    fields["ConsistentRead"] = Json::boolean(true)
+  let names = match expression_attribute_names {
+    Some(names) => names
+    None => Map([])
   }
-  parse_get_item(self.call("GetItem", Json::object(fields)))
+  parse_get_item(
+    self.call(
+      "GetItem",
+      get_item_payload(
+        table,
+        key,
+        consistent_read~,
+        projection_expression~,
+        expression_attribute_names=names,
+      ),
+    ),
+  )
 }
 
 ///|

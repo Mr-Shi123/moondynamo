@@ -35,6 +35,20 @@ async fn main {
   guard found_item.get("title") == Some(@lib.Text("The MoonBit Book")) else {
     fail("GetItem returned an unexpected item")
   }
+  let selected = db.get_item(
+    "MoonDynamoExample",
+    key,
+    projection_expression="title, #st",
+    expression_attribute_names=Map([("#st", "status")]),
+  )
+  guard selected is Some(selected_item) else {
+    fail("projected GetItem returned no item")
+  }
+  guard selected_item.get("title") == Some(@lib.Text("The MoonBit Book")) &&
+    selected_item.get("status") == Some(@lib.Text("active")) &&
+    selected_item.get("pages") is None else {
+    fail("projected GetItem returned unexpected fields")
+  }
   let updated = db.update_item(
     "MoonDynamoExample",
     key,

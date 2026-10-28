@@ -84,7 +84,14 @@ const server = http.createServer(async (request, response) => {
         break;
       case 'GetItem':
         if (body.Key?.pk?.S !== 'book#1') throw new Error('invalid GetItem key');
-        send(response, 200, item ? { Item: item } : {});
+        if (body.ProjectionExpression !== undefined) {
+          if (body.ProjectionExpression !== 'title, #st' || body.ExpressionAttributeNames?.['#st'] !== 'status' || Object.keys(body).length !== 4) {
+            throw new Error('invalid GetItem projection');
+          }
+          send(response, 200, item ? { Item: { title: item.title, status: item.status } } : {});
+        } else {
+          send(response, 200, item ? { Item: item } : {});
+        }
         break;
       case 'UpdateItem':
         if (body.Key?.pk?.S !== 'book#1') throw new Error('invalid UpdateItem key');
@@ -116,7 +123,7 @@ const server = http.createServer(async (request, response) => {
       default:
         throw new Error(`unexpected action ${action}`);
     }
-    if (actions.join(',') === 'CreateTable,DescribeTable,ListTables,PutItem,GetItem,UpdateItem,Query,Scan,DeleteItem,GetItem') {
+    if (actions.join(',') === 'CreateTable,DescribeTable,ListTables,PutItem,GetItem,GetItem,UpdateItem,Query,Scan,DeleteItem,GetItem') {
       console.log('HTTP integration fixture passed: ' + actions.join(' → '));
       server.close();
     }

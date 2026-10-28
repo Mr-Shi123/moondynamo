@@ -439,3 +439,33 @@ test "list tables rejects malformed names array" {
     _ => fail("malformed TableNames must fail")
   }
 }
+
+///|
+test "get item payload selects fields with a reserved name" {
+  let payload = get_item_payload(
+    "books",
+    Map([("pk", Text("book#1"))]),
+    consistent_read=true,
+    projection_expression=Some("title, #st"),
+    expression_attribute_names=Map([("#st", "status")]),
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"TableName\":\"books\",\"Key\":{\"pk\":{\"S\":\"book#1\"}},\"ConsistentRead\":true,\"ProjectionExpression\":\"title, #st\",\"ExpressionAttributeNames\":{\"#st\":\"status\"}}",
+  )
+}
+
+///|
+test "get item payload omits projection fields by default" {
+  let payload = get_item_payload(
+    "books",
+    Map([("pk", Text("book#1"))]),
+    consistent_read=false,
+    projection_expression=None,
+    expression_attribute_names=Map([]),
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"TableName\":\"books\",\"Key\":{\"pk\":{\"S\":\"book#1\"}}}",
+  )
+}
