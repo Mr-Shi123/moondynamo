@@ -109,11 +109,16 @@ const server = http.createServer(async (request, response) => {
         if (body.FilterExpression !== '#st = :st' || body.ExpressionAttributeNames?.['#st'] !== 'status' || body.ExpressionAttributeValues?.[':st']?.S !== 'active') {
           throw new Error('invalid Query filter');
         }
-        send(response, 200, { Items: item ? [item] : [], Count: item ? 1 : 0, ScannedCount: item ? 1 : 0 });
+        if (body.ProjectionExpression !== 'title' || Object.keys(body).length !== 6) {
+          throw new Error('invalid Query projection');
+        }
+        send(response, 200, { Items: item ? [{ title: item.title }] : [], Count: item ? 1 : 0, ScannedCount: item ? 1 : 0 });
         break;
       case 'Scan':
-        if (Object.keys(body).length !== 1) throw new Error('invalid Scan request');
-        send(response, 200, { Items: item ? [item] : [], Count: item ? 1 : 0, ScannedCount: item ? 1 : 0 });
+        if (body.ProjectionExpression !== 'title, #st' || body.ExpressionAttributeNames?.['#st'] !== 'status' || Object.keys(body).length !== 3) {
+          throw new Error('invalid Scan projection');
+        }
+        send(response, 200, { Items: item ? [{ title: item.title, status: item.status }] : [], Count: item ? 1 : 0, ScannedCount: item ? 1 : 0 });
         break;
       case 'DeleteItem':
         if (body.Key?.pk?.S !== 'book#1') throw new Error('invalid DeleteItem key');

@@ -13,7 +13,7 @@ A typed Amazon DynamoDB client for MoonBit. MoonDynamo talks the DynamoDB JSON A
 - **Batch operations**: `batch_get_item` reads up to 100 keys in one round trip and `batch_write_item` applies up to 25 puts/deletes; whatever DynamoDB could not process comes back for an explicit re-drive.
 - **Every DynamoDB attribute type**: `S`, `N`, `B`, `BOOL`, `NULL`, `L`, `M`, `SS`, `NS`, and `BS` map to one typed `AttributeValue` enum. Numbers stay as decimal strings end to end, so no precision is lost through floating point.
 - **Conditional writes and filtered queries**: you write condition, key-condition, and filter expressions; the client sends typed expression-attribute values with them.
-- **Selective reads**: `get_item` can return only the fields named by `projection_expression`, including reserved names via `expression_attribute_names`.
+- **Selective reads**: `get_item`, `query`, and `scan` can return only the fields named by `projection_expression`, including reserved names via `expression_attribute_names`.
 - **Secondary indexes**: point `query` or `scan` at any local or global secondary index with `index_name`, read oldest-first with `descending`, and force strongly consistent base-table reads with `consistent_read`.
 - **Reserved-word-safe expressions**: pass `#name` placeholders through `expression_attribute_names`, so attributes called `status`, `size`, or `timestamp` are reachable from any expression.
 - **Partial updates**: `update_item` runs `SET` / `ADD` / `REMOVE` expressions and can hand back the resulting attributes via `ReturnValues`.
@@ -54,7 +54,7 @@ moon test --target js
 moon check --target js --deny-warn
 ```
 
-The bundled end-to-end demo ([cmd/main/main.mbt](cmd/main/main.mbt)) creates and lists a table, writes a book, reads it back with both full and selected fields, updates its page count with `ReturnValues`, runs a filtered query through a `#name` placeholder, scans the table, deletes the item, and confirms it is gone. The table is left in place so the demo can be re-run.
+The bundled end-to-end demo ([cmd/main/main.mbt](cmd/main/main.mbt)) creates and lists a table, writes a book, reads it back with both full and selected fields, updates its page count with `ReturnValues`, runs a filtered query and scan with selected fields, deletes the item, and confirms it is gone. The table is left in place so the demo can be re-run.
 
 **Option A — DynamoDB Local** (recommended):
 
@@ -200,7 +200,7 @@ The update expression is a DynamoDB `UpdateExpression` string, so `SET` / `ADD` 
 
 ### Reserved words and name placeholders
 
-DynamoDB reserves hundreds of words (`status`, `size`, `name`, `timestamp`, …), so expressions must reach such attributes through `#name` placeholders. `get_item`, `put_item`, `update_item`, `delete_item`, and `query` all accept `expression_attribute_names?`, and `query` also takes a `filter_expression?`:
+DynamoDB reserves hundreds of words (`status`, `size`, `name`, `timestamp`, …), so expressions must reach such attributes through `#name` placeholders. `get_item`, `put_item`, `update_item`, `delete_item`, `query`, and `scan` all accept `expression_attribute_names?`; `query` and `scan` also take `projection_expression?`:
 
 ```moonbit
 let result = db.query(
@@ -213,12 +213,15 @@ let result = db.query(
   ]),
   filter_expression="#st = :st AND pages <= :max",
   expression_attribute_names=Map([("#st", "status")]),
+  projection_expression="title",
 )
 for book in result.items {
-  // only active books with at most 500 pages
+  // only the title of active books with at most 500 pages
   ignore(book)
 }
 ```
+
+`projection_expression` controls the returned fields; it does not reduce the read capacity used for a table query. The pagination marker remains in `last_evaluated_key` even when key attributes are not projected. See the [AWS Query API](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html).
 
 ### Query a secondary index
 
@@ -240,7 +243,7 @@ for book in recent.items {
 
 ### Scan a table
 
-`scan` reads every item of a table or index, with the same expression, name-placeholder, and paging options as `query`:
+`scan` reads every item of a table or index, with the same expression, name-placeholder, projection, and paging options as `query`:
 
 ```moonbit
 let mut exclusive_start_key : @moondynamo.Item? = None
@@ -249,6 +252,8 @@ while true {
     "Books",
     filter_expression="pages <= :max",
     expression_attribute_values=Map([(":max", @moondynamo.Number("500"))]),
+    projection_expression="title, #st",
+    expression_attribute_names=Map([("#st", "status")]),
     exclusive_start_key?,
     limit=100,
   )
@@ -362,8 +367,8 @@ pub(all) suberror DynamoError {
 
 ## How it is tested
 
-- **44 unit tests** (`moon test --target js`) cover attribute round-trips, request construction and signing, expression payloads with name placeholders, projected `GetItem` requests, `UpdateItem` payloads and response parsing, the `ReturnValues` mapping, index and scan payloads, batch payloads and limits with unprocessed-key/request parsing, `ListTables` paging and validation, response and error parsing, and the retry decision predicate.
-- **A self-verifying HTTP fixture** ([scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)) exercises real HTTP round trips and independently recomputes every SigV4 signature, so signing drift cannot pass silently. Its scenario includes a projected `GetItem`, `ListTables`, `UpdateItem` with `ReturnValues=ALL_NEW`, a filtered `Query` via a `#name` placeholder, and a `Scan`.
+- **46 unit tests** (`moon test --target js`) cover attribute round-trips, request construction and signing, expression payloads with name placeholders, projected `GetItem`, `Query`, and `Scan` requests, `UpdateItem` payloads and response parsing, the `ReturnValues` mapping, index and scan payloads, batch payloads and limits with unprocessed-key/request parsing, `ListTables` paging and validation, response and error parsing, and the retry decision predicate.
+- **A self-verifying HTTP fixture** ([scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)) exercises real HTTP round trips and independently recomputes every SigV4 signature, so signing drift cannot pass silently. Its scenario includes projected `GetItem`, `Query`, and `Scan` calls, `ListTables`, and `UpdateItem` with `ReturnValues=ALL_NEW`.
 - **Verified against DynamoDB Local 1.25.1** end to end: `CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → Scan → DeleteItem → GetItem`, including conditional-write rejection with a real `ConditionalCheckFailedException`, multi-page `Query` walks through `LastEvaluatedKey`, `#name` placeholders for reserved-word attributes, a `Query` against a real global secondary index (`index_name` + `descending`) plus a filtered, paged `Scan`, and `batch_get_item` / `batch_write_item` runs confirming that missing keys are absent (not unprocessed) while processed writes take effect.
 
 ### Platform status

@@ -65,10 +65,23 @@ async fn main {
     Map([(":pk", @lib.Text("book#1")), (":st", @lib.Text("active"))]),
     filter_expression="#st = :st",
     expression_attribute_names=Map([("#st", "status")]),
+    projection_expression="title",
   )
-  guard result.items.length() == 1 else { fail("Query returned no item") }
-  let scanned = db.scan("MoonDynamoExample")
-  guard scanned.items.length() == 1 else { fail("Scan returned no item") }
+  guard result.items.length() == 1 &&
+    result.items[0].get("title") == Some(@lib.Text("The MoonBit Book")) &&
+    result.items[0].get("pages") is None else {
+    fail("Query projection returned unexpected fields")
+  }
+  let scanned = db.scan(
+    "MoonDynamoExample",
+    projection_expression="title, #st",
+    expression_attribute_names=Map([("#st", "status")]),
+  )
+  guard scanned.items.length() == 1 &&
+    scanned.items[0].get("status") == Some(@lib.Text("active")) &&
+    scanned.items[0].get("pages") is None else {
+    fail("Scan projection returned unexpected fields")
+  }
   db.delete_item("MoonDynamoExample", key)
   guard db.get_item("MoonDynamoExample", key) is None else {
     fail("DeleteItem did not remove the item")

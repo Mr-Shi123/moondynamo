@@ -217,6 +217,7 @@ fn query_payload(
   expression_attribute_names~ : Map[String, String],
   exclusive_start_key~ : Item?,
   limit~ : Int?,
+  projection_expression? : String,
 ) -> Json {
   let fields : Map[String, Json] = Map([
     ("TableName", Json::string(table)),
@@ -233,6 +234,9 @@ fn query_payload(
     fields["ExpressionAttributeNames"] = encode_names(
       expression_attribute_names,
     )
+  }
+  if projection_expression is Some(expression) {
+    fields["ProjectionExpression"] = Json::string(expression)
   }
   if exclusive_start_key is Some(key) {
     fields["ExclusiveStartKey"] = encode_item(key)
@@ -259,6 +263,7 @@ fn scan_payload(
   consistent_read~ : Bool?,
   exclusive_start_key~ : Item?,
   limit~ : Int?,
+  projection_expression? : String,
 ) -> Json {
   let fields : Map[String, Json] = Map([("TableName", Json::string(table))])
   if index_name is Some(name) {
@@ -276,6 +281,9 @@ fn scan_payload(
     fields["ExpressionAttributeNames"] = encode_names(
       expression_attribute_names,
     )
+  }
+  if projection_expression is Some(expression) {
+    fields["ProjectionExpression"] = Json::string(expression)
   }
   if exclusive_start_key is Some(key) {
     fields["ExclusiveStartKey"] = encode_item(key)
@@ -712,6 +720,8 @@ pub async fn Client::update_item(
 }
 
 ///|
+/// Query matching items, optionally requesting only selected attributes with
+/// `projection_expression`.
 pub async fn Client::query(
   self : Client,
   table : String,
@@ -724,6 +734,7 @@ pub async fn Client::query(
   exclusive_start_key? : Item,
   limit? : Int,
   expression_attribute_names? : Map[String, String],
+  projection_expression? : String,
 ) -> QueryResult {
   let names = match expression_attribute_names {
     Some(names) => names
@@ -743,6 +754,7 @@ pub async fn Client::query(
         expression_attribute_names=names,
         exclusive_start_key~,
         limit~,
+        projection_expression?,
       ),
     ),
   )
@@ -753,6 +765,7 @@ pub async fn Client::query(
 /// page by page. `filter_expression` drops items server-side; because the
 /// filter applies after `limit` is counted, a page can come back empty while
 /// `last_evaluated_key` is still present — keep following it until `None`.
+/// Use `projection_expression` to request only selected attributes.
 pub async fn Client::scan(
   self : Client,
   table : String,
@@ -763,6 +776,7 @@ pub async fn Client::scan(
   consistent_read? : Bool,
   exclusive_start_key? : Item,
   limit? : Int,
+  projection_expression? : String,
 ) -> QueryResult {
   let values = match expression_attribute_values {
     Some(values) => values
@@ -784,6 +798,7 @@ pub async fn Client::scan(
         consistent_read~,
         exclusive_start_key~,
         limit~,
+        projection_expression?,
       ),
     ),
   )

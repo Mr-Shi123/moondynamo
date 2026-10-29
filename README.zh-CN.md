@@ -13,7 +13,7 @@
 - **批量操作**：`batch_get_item` 单次读取最多 100 个键，`batch_write_item` 单次应用最多 25 个写入；DynamoDB 未处理的请求会原样返回，交给调用方显式重驱动。
 - **完整的 DynamoDB 属性类型**：`S`、`N`、`B`、`BOOL`、`NULL`、`L`、`M`、`SS`、`NS`、`BS` 全部映射到一个类型化的 `AttributeValue` 枚举。数字始终以十进制字符串表示，全程不经过浮点数，不会有精度损失。
 - **条件写入与过滤查询**：条件表达式、键表达式和过滤表达式由你编写，客户端负责携带类型化的表达式占位值。
-- **按需读取字段**：`get_item` 可通过 `projection_expression` 只返回指定字段，也能用 `expression_attribute_names` 访问保留字属性。
+- **按需读取字段**：`get_item`、`query` 和 `scan` 可通过 `projection_expression` 只返回指定字段，也能用 `expression_attribute_names` 访问保留字属性。
 - **二级索引**：`query` 和 `scan` 都可通过 `index_name` 指向本地或全局二级索引，`descending` 反转读取顺序，`consistent_read` 强制基表强一致读。
 - **保留字安全的表达式**：通过 `expression_attribute_names` 传入 `#name` 占位符，`status`、`size`、`timestamp` 这类与保留字冲突的属性名也能在任何表达式中使用。
 - **局部更新**：`update_item` 支持 `SET` / `ADD` / `REMOVE` 表达式，并可通过 `ReturnValues` 拿回更新后的属性。
@@ -54,7 +54,7 @@ moon test --target js
 moon check --target js --deny-warn
 ```
 
-项目自带的端到端示例（[cmd/main/main.mbt](cmd/main/main.mbt)）会建表、列出表、写入一本书、读取整条记录与指定字段、用 `ReturnValues` 更新页数、通过 `#name` 占位符执行过滤查询、扫描表、删除并确认记录已消失。表会保留，方便重复运行。
+项目自带的端到端示例（[cmd/main/main.mbt](cmd/main/main.mbt)）会建表、列出表、写入一本书、读取整条记录与指定字段、用 `ReturnValues` 更新页数、执行仅返回指定字段的过滤查询和扫描、删除并确认记录已消失。表会保留，方便重复运行。
 
 **方式一 —— DynamoDB Local**（推荐）：
 
@@ -200,7 +200,7 @@ guard updated is Some(book) && book.get("pages") == Some(@moondynamo.Number("200
 
 ### 保留字与名称占位符
 
-DynamoDB 保留了数百个词（`status`、`size`、`name`、`timestamp`……），表达式必须通过 `#name` 占位符访问这类属性。`get_item`、`put_item`、`update_item`、`delete_item` 和 `query` 都接受 `expression_attribute_names?`，`query` 还接受 `filter_expression?`：
+DynamoDB 保留了数百个词（`status`、`size`、`name`、`timestamp`……），表达式必须通过 `#name` 占位符访问这类属性。`get_item`、`put_item`、`update_item`、`delete_item`、`query` 和 `scan` 都接受 `expression_attribute_names?`；`query` 和 `scan` 还接受 `projection_expression?`：
 
 ```moonbit
 let result = db.query(
@@ -213,12 +213,15 @@ let result = db.query(
   ]),
   filter_expression="#st = :st AND pages <= :max",
   expression_attribute_names=Map([("#st", "status")]),
+  projection_expression="title",
 )
 for book in result.items {
-  // 只剩下 active 且页数不超过 500 的书
+  // 只返回 active 且页数不超过 500 的书的标题
   ignore(book)
 }
 ```
+
+`projection_expression` 只控制返回字段，不会减少基表查询消耗的读取容量。即使投影未包含键字段，分页标记仍在 `last_evaluated_key` 中。参见 [AWS Query API](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html)。
 
 ### 查询二级索引
 
@@ -240,7 +243,7 @@ for book in recent.items {
 
 ### 扫描表
 
-`scan` 逐页读取表或索引的全部条目，支持与 `query` 相同的表达式、名称占位符和分页选项：
+`scan` 逐页读取表或索引的全部条目，支持与 `query` 相同的表达式、名称占位符、字段投影和分页选项：
 
 ```moonbit
 let mut exclusive_start_key : @moondynamo.Item? = None
@@ -249,6 +252,8 @@ while true {
     "Books",
     filter_expression="pages <= :max",
     expression_attribute_values=Map([(":max", @moondynamo.Number("500"))]),
+    projection_expression="title, #st",
+    expression_attribute_names=Map([("#st", "status")]),
     exclusive_start_key?,
     limit=100,
   )
@@ -362,8 +367,8 @@ pub(all) suberror DynamoError {
 
 ## 测试与验证
 
-- **44 个单元测试**（`moon test --target js`）覆盖属性值往返转换、请求构造与签名、带名称占位符的表达式负载、`GetItem` 字段投影请求、`UpdateItem` 负载与响应解析、`ReturnValues` 映射、索引与 Scan 负载、批量负载与上限校验及未处理键/请求解析、`ListTables` 分页与参数校验、响应与错误解析，以及重试判定谓词。
-- **自带验证的 HTTP fixture**（[scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)）走真实 HTTP 往返，并独立重算每一次 SigV4 签名——签名实现一旦漂移，测试会立即失败。场景现已包含带字段投影的 `GetItem`、`ListTables`、带 `ReturnValues=ALL_NEW` 的 `UpdateItem`、通过 `#name` 占位符的过滤 `Query`，以及 `Scan`。
+- **46 个单元测试**（`moon test --target js`）覆盖属性值往返转换、请求构造与签名、带名称占位符的表达式负载、`GetItem`、`Query` 和 `Scan` 的字段投影请求、`UpdateItem` 负载与响应解析、`ReturnValues` 映射、索引与 Scan 负载、批量负载与上限校验及未处理键/请求解析、`ListTables` 分页与参数校验、响应与错误解析，以及重试判定谓词。
+- **自带验证的 HTTP fixture**（[scripts/mock-dynamodb.mjs](scripts/mock-dynamodb.mjs)）走真实 HTTP 往返，并独立重算每一次 SigV4 签名——签名实现一旦漂移，测试会立即失败。场景现已包含带字段投影的 `GetItem`、`Query` 和 `Scan`、`ListTables`，以及带 `ReturnValues=ALL_NEW` 的 `UpdateItem`。
 - **已对 DynamoDB Local 1.25.1 做真机端到端验证**：`CreateTable → DescribeTable → PutItem → GetItem → UpdateItem → Query → Scan → DeleteItem → GetItem`，包括用真实的 `ConditionalCheckFailedException` 验证条件写入拒绝、通过 `LastEvaluatedKey` 完成多页 `Query` 遍历、为保留字属性使用 `#name` 占位符、对真实全局二级索引的 `Query`（`index_name` + `descending`）、带过滤的分页 `Scan`，以及 `batch_get_item` / `batch_write_item` 真机运行——确认缺失键是"缺席"而非"未处理"，且已处理的写入真实生效。
 
 ### 平台状态

@@ -469,3 +469,43 @@ test "get item payload omits projection fields by default" {
     "{\"TableName\":\"books\",\"Key\":{\"pk\":{\"S\":\"book#1\"}}}",
   )
 }
+
+///|
+test "query payload projects selected attributes" {
+  let payload = query_payload(
+    "books",
+    "pk = :pk",
+    Map([(":pk", Text("book#1"))]),
+    filter_expression=None,
+    index_name=None,
+    descending=None,
+    consistent_read=None,
+    expression_attribute_names=Map([("#st", "status")]),
+    exclusive_start_key=None,
+    limit=None,
+    projection_expression="title, #st",
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"TableName\":\"books\",\"KeyConditionExpression\":\"pk = :pk\",\"ExpressionAttributeValues\":{\":pk\":{\"S\":\"book#1\"}},\"ExpressionAttributeNames\":{\"#st\":\"status\"},\"ProjectionExpression\":\"title, #st\"}",
+  )
+}
+
+///|
+test "scan payload projects selected attributes" {
+  let payload = scan_payload(
+    "books",
+    filter_expression=None,
+    expression_attribute_values=Map([]),
+    expression_attribute_names=Map([("#st", "status")]),
+    index_name=None,
+    consistent_read=None,
+    exclusive_start_key=None,
+    limit=None,
+    projection_expression="title, #st",
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"TableName\":\"books\",\"ExpressionAttributeNames\":{\"#st\":\"status\"},\"ProjectionExpression\":\"title, #st\"}",
+  )
+}
