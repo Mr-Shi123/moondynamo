@@ -24,7 +24,7 @@
 
 ## 环境要求
 
-- 较新的 [moon](https://docs.moonbitlang.com) 构建——已在 `0.1.20260920` 上验证。MoonDynamo 以 **JavaScript** 为目标后端，运行于 Node.js。
+- [MoonBit](https://docs.moonbitlang.com) 的 `moonc` 版本须为 **0.10.16 或更高**——已用 `moon 0.1.20261028` / `moonc 0.10.18` 验证。MoonDynamo 以 **JavaScript** 为目标后端，运行于 Node.js。
 - 可选：Java 8+ 用于运行 DynamoDB Local，或 Node.js 18+ 用于项目自带的 mock 服务。
 
 ## 安装
@@ -47,11 +47,13 @@ import {
 
 ## 快速开始
 
-在本仓库根目录运行测试与严格检查：
+在本仓库根目录确认编译器版本，并运行检查、构建与测试：
 
 ```bash
-moon test --target js
+moon version --all
 moon check --target js --deny-warn
+moon build --target js
+moon test --target js --deny-warn
 ```
 
 项目自带的端到端示例（[cmd/main/main.mbt](cmd/main/main.mbt)）会建表、列出表、写入一本书、读取整条记录与指定字段、用 `ReturnValues` 更新页数、执行仅返回指定字段的过滤查询和扫描、删除并确认记录已消失。表会保留，方便重复运行。

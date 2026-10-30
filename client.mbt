@@ -216,7 +216,7 @@ fn query_payload(
   consistent_read~ : Bool?,
   expression_attribute_names~ : Map[String, String],
   exclusive_start_key~ : Item?,
-  limit~ : Int?,
+  limit~ : Int32?,
   projection_expression? : String,
 ) -> Json {
   let fields : Map[String, Json] = Map([
@@ -262,7 +262,7 @@ fn scan_payload(
   index_name~ : String?,
   consistent_read~ : Bool?,
   exclusive_start_key~ : Item?,
-  limit~ : Int?,
+  limit~ : Int32?,
   projection_expression? : String,
 ) -> Json {
   let fields : Map[String, Json] = Map([("TableName", Json::string(table))])
@@ -555,7 +555,7 @@ fn parse_query_result(json : Json) -> QueryResult raise {
 
 ///|
 fn list_tables_payload(
-  limit~ : Int?,
+  limit~ : Int32?,
   exclusive_start_table_name~ : String?,
 ) -> Json raise {
   let fields : Map[String, Json] = Map([])
@@ -638,7 +638,7 @@ pub async fn Client::get_item(
   self : Client,
   table : String,
   key : Item,
-  consistent_read? : Bool = false,
+  consistent_read~ : Bool = false,
   projection_expression? : String,
   expression_attribute_names? : Map[String, String],
 ) -> Item? {
@@ -732,7 +732,7 @@ pub async fn Client::query(
   descending? : Bool,
   consistent_read? : Bool,
   exclusive_start_key? : Item,
-  limit? : Int,
+  limit? : Int32,
   expression_attribute_names? : Map[String, String],
   projection_expression? : String,
 ) -> QueryResult {
@@ -775,7 +775,7 @@ pub async fn Client::scan(
   index_name? : String,
   consistent_read? : Bool,
   exclusive_start_key? : Item,
-  limit? : Int,
+  limit? : Int32,
   projection_expression? : String,
 ) -> QueryResult {
   let values = match expression_attribute_values {
@@ -873,7 +873,7 @@ pub async fn Client::describe_table(self : Client, table : String) -> Json {
 /// next page. DynamoDB returns at most 100 names per page.
 pub async fn Client::list_tables(
   self : Client,
-  limit? : Int,
+  limit? : Int32,
   exclusive_start_table_name? : String,
 ) -> ListTablesResult {
   parse_list_tables_result(

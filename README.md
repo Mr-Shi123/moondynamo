@@ -24,7 +24,7 @@ A typed Amazon DynamoDB client for MoonBit. MoonDynamo talks the DynamoDB JSON A
 
 ## Requirements
 
-- A recent [moon](https://docs.moonbitlang.com) build — verified with `0.1.20260920`. MoonDynamo targets the **JavaScript** backend and runs on Node.js.
+- [MoonBit](https://docs.moonbitlang.com) with `moonc` **0.10.16 or newer** — verified with `moon 0.1.20261028` / `moonc 0.10.18`. MoonDynamo targets the **JavaScript** backend and runs on Node.js.
 - Optional: Java 8+ to run DynamoDB Local, or Node.js 18+ for the bundled mock server.
 
 ## Installation
@@ -47,11 +47,13 @@ The package is available under the default alias `@moondynamo`.
 
 ## Quick start
 
-Run the test suite and the strict lint from this repository's root:
+Check the compiler version, then check, build, and test from this repository's root:
 
 ```bash
-moon test --target js
+moon version --all
 moon check --target js --deny-warn
+moon build --target js
+moon test --target js --deny-warn
 ```
 
 The bundled end-to-end demo ([cmd/main/main.mbt](cmd/main/main.mbt)) creates and lists a table, writes a book, reads it back with both full and selected fields, updates its page count with `ReturnValues`, runs a filtered query and scan with selected fields, deletes the item, and confirms it is gone. The table is left in place so the demo can be re-run.

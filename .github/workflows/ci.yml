@@ -24,11 +24,27 @@ jobs:
           moon version --all
           moon update
 
+      - name: Verify moonc version (at least 0.10.16)
+        run: |
+          python3 - <<'PY'
+          import re
+          import subprocess
+
+          output = subprocess.check_output(["moonc", "-v"], text=True).strip()
+          match = re.search(r"\bv(\d+)\.(\d+)\.(\d+)", output)
+          if match is None or tuple(map(int, match.groups())) < (0, 10, 16):
+              raise SystemExit(f"moonc 0.10.16 or newer required, found: {output}")
+          print(output)
+          PY
+
       - name: Check (strict, JS target)
         run: moon check --target js --deny-warn
 
       - name: Check (native target)
         run: moon check --target native
+
+      - name: Build (JS target)
+        run: moon build --target js
 
       - name: Test (JS target)
         run: moon test --target js

@@ -28,7 +28,7 @@ pub(all) struct PreparedRequest {
 pub(all) suberror DynamoError {
   InvalidConfig(String)
   InvalidResponse(String)
-  Service(Int, String, String, String?)
+  Service(Int32, String, String, String?)
 }
 
 ///|
@@ -158,7 +158,7 @@ fn request_id(headers : Map[String, String]) -> String? {
 /// Decode a DynamoDB response. Non-2xx responses become typed service
 /// errors, preserving the service code and request ID for callers.
 pub fn parse_response(
-  status : Int,
+  status : Int32,
   headers : Map[String, String],
   body : String,
 ) -> Json raise DynamoError {
