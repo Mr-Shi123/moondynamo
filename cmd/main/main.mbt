@@ -49,6 +49,20 @@ async fn main {
     selected_item.get("pages") is None else {
     fail("projected GetItem returned unexpected fields")
   }
+  let batch = db.batch_get_item(
+    "MoonDynamoExample",
+    [key],
+    consistent_read=true,
+    projection_expression="pk, title, #st",
+    expression_attribute_names=Map([("#st", "status")]),
+  )
+  guard batch.items.length() == 1 &&
+    batch.unprocessed_keys.is_empty() &&
+    batch.items[0].get("pk") == Some(@lib.Text("book#1")) &&
+    batch.items[0].get("status") == Some(@lib.Text("active")) &&
+    batch.items[0].get("pages") is None else {
+    fail("projected BatchGetItem returned unexpected fields")
+  }
   let updated = db.update_item(
     "MoonDynamoExample",
     key,

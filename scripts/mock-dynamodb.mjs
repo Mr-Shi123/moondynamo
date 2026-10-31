@@ -56,7 +56,7 @@ const server = http.createServer(async (request, response) => {
     verifySignature(request, data);
     const body = JSON.parse(data);
     actions.push(action);
-    if (action !== 'ListTables' && body.TableName !== table) throw new Error('unexpected table');
+    if (action !== 'ListTables' && action !== 'BatchGetItem' && body.TableName !== table) throw new Error('unexpected table');
     switch (action) {
       case 'CreateTable':
         if (body.BillingMode !== 'PAY_PER_REQUEST' || body.KeySchema?.[0]?.AttributeName !== 'pk') {
@@ -93,6 +93,16 @@ const server = http.createServer(async (request, response) => {
           send(response, 200, item ? { Item: item } : {});
         }
         break;
+      case 'BatchGetItem': {
+        const entry = body.RequestItems?.[table];
+        if (Object.keys(body).length !== 1 || entry?.Keys?.length !== 1 || entry.Keys[0]?.pk?.S !== 'book#1' ||
+            entry.ConsistentRead !== true || entry.ProjectionExpression !== 'pk, title, #st' ||
+            entry.ExpressionAttributeNames?.['#st'] !== 'status' || Object.keys(entry).length !== 4) {
+          throw new Error('invalid BatchGetItem projection');
+        }
+        send(response, 200, { Responses: { [table]: item ? [{ pk: item.pk, title: item.title, status: item.status }] : [] }, UnprocessedKeys: {} });
+        break;
+      }
       case 'UpdateItem':
         if (body.Key?.pk?.S !== 'book#1') throw new Error('invalid UpdateItem key');
         if (body.UpdateExpression !== 'SET pages = :pages' || body.ExpressionAttributeValues?.[':pages']?.N !== '200') {
@@ -128,7 +138,7 @@ const server = http.createServer(async (request, response) => {
       default:
         throw new Error(`unexpected action ${action}`);
     }
-    if (actions.join(',') === 'CreateTable,DescribeTable,ListTables,PutItem,GetItem,GetItem,UpdateItem,Query,Scan,DeleteItem,GetItem') {
+    if (actions.join(',') === 'CreateTable,DescribeTable,ListTables,PutItem,GetItem,GetItem,BatchGetItem,UpdateItem,Query,Scan,DeleteItem,GetItem') {
       console.log('HTTP integration fixture passed: ' + actions.join(' → '));
       server.close();
     }

@@ -290,6 +290,21 @@ test "batch get payload can request a consistent read" {
 }
 
 ///|
+test "batch get payload projects fields with a reserved name" {
+  let payload = batch_get_payload(
+    "books",
+    [Map([("pk", Text("book#1"))])],
+    consistent_read=Some(true),
+    projection_expression="pk, #st",
+    expression_attribute_names=Map([("#st", "status")]),
+  )
+  assert_eq(
+    payload.stringify(),
+    "{\"RequestItems\":{\"books\":{\"Keys\":[{\"pk\":{\"S\":\"book#1\"}}],\"ConsistentRead\":true,\"ProjectionExpression\":\"pk, #st\",\"ExpressionAttributeNames\":{\"#st\":\"status\"}}}}",
+  )
+}
+
+///|
 /// Returns whether the body raised any error.
 fn raises(body : () -> Unit raise) -> Bool {
   try {

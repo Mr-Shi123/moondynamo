@@ -57,7 +57,7 @@ pub fn BatchGetResult::to_repr(Self) -> @debug.Repr
 pub struct Client {
   config : Config
 }
-pub async fn Client::batch_get_item(Self, String, Array[Map[String, AttributeValue]], consistent_read? : Bool) -> BatchGetResult
+pub async fn Client::batch_get_item(Self, String, Array[Map[String, AttributeValue]], consistent_read? : Bool, projection_expression? : String, expression_attribute_names? : Map[String, String]) -> BatchGetResult
 pub async fn Client::batch_write_item(Self, String, Array[WriteRequest]) -> Array[WriteRequest]
 pub async fn Client::create_table(Self, String, String, sort_key? : String) -> Json
 pub async fn Client::delete_item(Self, String, Map[String, AttributeValue], condition_expression? : String, expression_attribute_values? : Map[String, AttributeValue], expression_attribute_names? : Map[String, String]) -> Unit

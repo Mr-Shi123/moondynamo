@@ -340,6 +340,8 @@ fn batch_get_payload(
   table : String,
   keys : Array[Item],
   consistent_read~ : Bool?,
+  projection_expression? : String,
+  expression_attribute_names? : Map[String, String],
 ) -> Json raise {
   if keys.is_empty() {
     raise InvalidConfig("batch_get_item needs at least one key")
@@ -356,6 +358,12 @@ fn batch_get_payload(
   let table_entry : Map[String, Json] = Map([("Keys", Json::array(entries))])
   if consistent_read is Some(true) {
     table_entry["ConsistentRead"] = Json::boolean(true)
+  }
+  if projection_expression is Some(expression) {
+    table_entry["ProjectionExpression"] = Json::string(expression)
+  }
+  if expression_attribute_names is Some(names) && !names.is_empty() {
+    table_entry["ExpressionAttributeNames"] = encode_names(names)
   }
   let request_items : Map[String, Json] = Map([
     (table, Json::object(table_entry)),
@@ -889,16 +897,29 @@ pub async fn Client::list_tables(
 /// absent from `items`; keys DynamoDB could not process (usually throttled)
 /// come back in `unprocessed_keys` — re-drive them in a follow-up call.
 /// Consistent reads can be requested for the base table with
-/// `consistent_read`.
+/// `consistent_read`. Use `projection_expression` to select attributes and
+/// `expression_attribute_names` for reserved attribute names. Include key
+/// attributes in the projection if results must be matched to input keys.
 pub async fn Client::batch_get_item(
   self : Client,
   table : String,
   keys : Array[Item],
   consistent_read? : Bool,
+  projection_expression? : String,
+  expression_attribute_names? : Map[String, String],
 ) -> BatchGetResult {
   parse_batch_get_result(
     table,
-    self.call("BatchGetItem", batch_get_payload(table, keys, consistent_read~)),
+    self.call(
+      "BatchGetItem",
+      batch_get_payload(
+        table,
+        keys,
+        consistent_read~,
+        projection_expression?,
+        expression_attribute_names?,
+      ),
+    ),
   )
 }
 
